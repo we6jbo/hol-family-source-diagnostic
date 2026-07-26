@@ -302,3 +302,10 @@ This score means the main conclusion and its limitation are understood: the date
 ### Verification marker
 
 A successful publication includes `token439873.touch` in the repository root. The local GitHub-check program verifies the corresponding raw URL before reporting success.
+
+
+## Publishing and installer safety
+
+The application does not publish automatically at startup. Publishing requires the explicit GitHub button or `./publish-to-github.sh`. The publishing helper stages only its documented allowlist, checks the remote branch before pushing, and never force-pushes.
+
+The investigator never executes a freshly downloaded installer with `sudo`. If Ollama is missing, it may download the official installer into `/tmp/sensitiveinf22` for manual inspection and report its SHA-256 digest, but it stops until Ollama is installed separately.

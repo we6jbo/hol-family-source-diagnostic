@@ -45,7 +45,7 @@ REPO_URL = f"https://github.com/{REPO_SLUG}"
 # On each fresh manual launch, upload the allowlisted project files once,
 # then replace the current process with a restarted copy. The environment
 # guard prevents an infinite upload/restart loop.
-AUTO_UPLOAD_AND_RESTART = True
+AUTO_UPLOAD_AND_RESTART = False
 RESTART_GUARD_ENV = "HOL_FAMILY_SOURCE_DIAGNOSTIC_RESTARTED"
 
 OBSERVED_CHATGPT_CONTEXT = (
@@ -409,6 +409,15 @@ def github_upload(status_callback) -> None:
                 ["git", "remote", "set-url", "origin", f"https://github.com/{REPO_SLUG}.git"]
             )
 
+        status_callback("Checking the remote branch before pushing...")
+        fetched = run_command(["git", "fetch", "origin", "main"], timeout=60)
+        if fetched["returncode"] == 0:
+            ancestor = run_command(["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"])
+            if ancestor["returncode"] != 0:
+                raise RuntimeError(
+                    "The GitHub branch contains changes not present locally. "
+                    "Review and merge them before publishing; no force-push was attempted."
+                )
         status_callback("Pushing updates to the existing repository...")
         pushed = run_command(["git", "push", "-u", "origin", "main"], timeout=60)
         if pushed["returncode"] != 0:
@@ -659,7 +668,6 @@ def main() -> None:
     ensure_project_files()
     root = tk.Tk()
     app = DateDiagApp(root)
-    root.after(700, app.auto_upload_and_restart)
     root.mainloop()
 
 

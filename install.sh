@@ -12,7 +12,7 @@ for file in \
     hol-reddit-ollama-bridge.py \
     run-hol-family-source-investigator.sh \
     run-reddit-ollama-bridge.sh \
-    README.md LICENSE .gitignore install.sh publish-to-github.sh token439873.touch
+    README.md LICENSE .gitignore install.sh publish-to-github.sh reinstall-source-tree.sh token439873.touch
 do
     [ ! -f "$SOURCE_DIR/$file" ] || cp "$SOURCE_DIR/$file" "$TARGET_DIR/$file"
 done

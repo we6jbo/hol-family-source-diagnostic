@@ -1,12 +1,10 @@
 {
   "manifest_version": 3,
   "name": "HOL Reddit Observation Bridge",
-  "version": "1.0.0",
-  "description": "Sends visible Reddit thread text to Jeremiah's localhost HOL bridge.",
+  "version": "1.0.1",
+  "description": "Sends Reddit thread text loaded in the current page to Jeremiah's localhost HOL bridge.",
   "permissions": [
-    "storage",
-    "activeTab",
-    "scripting"
+    "storage"
   ],
   "host_permissions": [
     "https://www.reddit.com/*",

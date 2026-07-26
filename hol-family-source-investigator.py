@@ -242,20 +242,26 @@ def download_official_installer() -> dict:
     }
 
 
-def install_ollama(status) -> dict:
+def inspect_ollama(status) -> dict:
+    """Use an existing Ollama installation; never execute downloaded code as root."""
     existing = shutil.which("ollama")
-    before = run(["ollama", "--version"]) if existing else None
+    if existing:
+        return {
+            "existing_binary": existing,
+            "version": run(["ollama", "--version"]),
+            "installer_executed": False,
+        }
+
     installer = download_official_installer()
-    status("Running the downloaded official Ollama installer. Sudo may prompt.")
-    installed = run(["sudo", "sh", str(INSTALLER_FILE)], timeout=600)
-    after = run(["ollama", "--version"])
-    return {
-        "existing_binary": existing or "",
-        "version_before": before,
-        "installer": installer,
-        "install_result": installed,
-        "version_after": after,
-    }
+    status(
+        "Ollama is not installed. The official installer was downloaded for manual "
+        f"review only at {INSTALLER_FILE}; it was not executed."
+    )
+    raise RuntimeError(
+        "Ollama is required for this investigation but is not installed. "
+        f"Review {INSTALLER_FILE} and install Ollama separately, then rerun this tool. "
+        f"Downloaded SHA-256: {installer['sha256']}"
+    )
 
 
 def choose_model(baseline: dict) -> dict:
@@ -572,8 +578,8 @@ class App:
             if command_requested() in {"stop", "stop-and-unload"}:
                 raise RuntimeError("Stopped before Ollama installation by command file.")
 
-            self.status("Installing or updating Ollama from the official Linux installer.")
-            result["ollama_install"] = install_ollama(self.status)
+            self.status("Checking for an existing Ollama installation.")
+            result["ollama_install"] = inspect_ollama(self.status)
             result["ollama_service"] = ensure_ollama_service(self.status)
 
             selection = choose_model(baseline2)
