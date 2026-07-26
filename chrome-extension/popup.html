@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>HOL Reddit Bridge</title>
+  <style>
+    body { font-family: sans-serif; width: 360px; padding: 12px; }
+    label { display: block; margin-top: 8px; font-weight: bold; }
+    input { width: 100%; box-sizing: border-box; }
+    button { margin-top: 10px; width: 100%; padding: 8px; }
+    #status { margin-top: 10px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h2>HOL Reddit Bridge</h2>
+  <p>Default: r/LocalLLaMA. Change it after ChatGPT recommends a subreddit.</p>
+  <label>Local server</label>
+  <input id="serverUrl" value="http://127.0.0.1:2526">
+  <label>Bridge token</label>
+  <input id="token" type="password">
+  <label>Subreddit label</label>
+  <input id="subreddit" value="LocalLLaMA">
+  <button id="save">Save Settings</button>
+  <button id="capture">Capture Current Visible Reddit Thread</button>
+  <button id="timestamp">Copy Encrypted Timestamp</button>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

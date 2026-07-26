@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "HOL Reddit Observation Bridge",
+  "version": "1.0.0",
+  "description": "Sends visible Reddit thread text to Jeremiah's localhost HOL bridge.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.reddit.com/*",
+    "https://old.reddit.com/*",
+    "http://127.0.0.1:2526/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.reddit.com/*",
+        "https://old.reddit.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

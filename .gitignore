@@ -1,0 +1,22 @@
+# Local diagnostic output and secrets
+*.log
+*.pid
+*.tmp
+__pycache__/
+*.py[cod]
+.env
+.venv/
+
+# Generated local reports
+*-full.txt
+*-public.txt
+*-handoff.txt
+*.jsonl
+irc-public-requests/
+ollama-investigator/
+github-upload-status.txt
+chatgpt-updater-command.json
+
+# GitHub CLI and editor artifacts
+.DS_Store
+*~

@@ -1,0 +1,2405 @@
+#!/usr/bin/env python3
+"""
+HOL Reddit + Ollama Date Investigation Bridge
+
+Copyright (C) Jul 22, 2026 13:19 Jeremiah O'Neal
+License: GNU GPL v3.0 or later
+
+Runs a localhost-only bridge on 127.0.0.1:2526, receives visible Reddit thread
+content from the companion Chrome extension, adds encrypted timestamps through
+Jeremiah's datetime_crypto module, asks Ollama for an independent analysis, and
+creates a clipboard-ready handoff for ChatGPT.
+
+The program does not auto-post to Reddit and does not claim access to OpenAI's
+private infrastructure.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import base64
+import re
+import random
+import secrets
+import shutil
+import socket
+import ssl
+import subprocess
+import sys
+import threading
+import traceback
+import time
+import tkinter as tk
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from tkinter import messagebox, scrolledtext
+from urllib.parse import urlparse
+
+APP_DIR = Path("/tmp/datediag")
+SENSITIVE_DIR = Path("/tmp/sensitiveinf22")
+PUBLIC_MODULE_DIR = Path("/home/we6jbo/.jul22proj-public")
+TOKEN_FILE = SENSITIVE_DIR / "hol-reddit-bridge-token"
+OBSERVATIONS_FILE = SENSITIVE_DIR / "reddit-observations.jsonl"
+HANDOFF_FILE = APP_DIR / "reddit-ollama-chatgpt-handoff.txt"
+STATUS_FILE = APP_DIR / "github-upload-status.txt"
+COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
+
+HOST = "127.0.0.1"
+PORT = 2526
+DEFAULT_SUBREDDIT = "LocalLLaMA"
+REPO_SLUG = "we6jbo/hol-family-source-diagnostic"
+REPO_URL = f"https://github.com/{REPO_SLUG}"
+MODEL = "llama3.2:3b"
+
+IRC_SECRET_MODULE_DIR = "/home/we6jbo/.ircsecrets"
+IRC_SERVER = "irc.snoonet.org"
+IRC_PORT = 6697
+IRC_NICK = "SirWeSixJBO"
+
+# Channels the bot may rotate through when nobody responds.
+# Add only channels where bots and this type of question are permitted.
+IRC_CHANNEL_ROTATION = (
+    "#snoonet",             # Official Network Portal | High
+    "#help",                # Network Assistance | High
+    "#chat",                # General Chat | High
+    "#talk",                # General Discussion | Medium
+    "#reddit",              # Reddit Community Hub | Medium
+    "#casualconversation",  # Friendly Social Chat | Medium
+    "#games",               # Gaming Discussion | Medium
+    "#anime",               # Media & Animation | Medium
+)
+
+IRC_NO_RESPONSE_SECONDS = 120
+
+# After this much human inactivity, ask whether anyone is present.
+IRC_QUIET_PROMPT_SECONDS = 300
+
+# After asking, wait this long for a human response before moving.
+IRC_QUIET_DEPART_SECONDS = 120
+
+# Recommendation review and next-step timing.
+IRC_RECOMMENDATION_INFO_SECONDS = 90
+IRC_RECOMMENDED_TRIAL_SECONDS = 120
+IRC_USEFUL_FOLLOWUP_SECONDS = 600
+MANUAL_MESSAGE_COOLDOWN_SECONDS = 30
+
+# Local-only diagnostics and public-output controls.
+DEBUG_REPORT_FILE = APP_DIR / "irc-debug-report.txt"
+SANITIZED_REQUEST_DIR = APP_DIR / "irc-public-requests"
+SENSITIVE_MARKER_FILE = SENSITIVE_DIR / "sensitive-marker.txt"
+IRC_REALNAME = (
+    "SirWeSixJBO, an automated Python bot written by ChatGPT for Jeremiah O'Neal; "
+    "source available after channel permission"
+)
+IRC_START_CHANNEL = "#snoonet"
+IRC_FALLBACK_CANDIDATES = [
+    "###bot-testing",
+    "##matrix-irc",
+    "##services",
+    "##python",
+    "##git",
+    "##reddit",
+    "##news",
+]
+IRC_WAIT_SECONDS = 600
+IRC_LOG_FILE = SENSITIVE_DIR / "irc-observations.jsonl"
+FRIENDLY_POST_LOG = Path("/home/we6jbo/.datediag-friendly-posts.jsonl")
+
+CHATGPT_EVIDENCE = """Known evidence:
+- ChatGPT's immediate date source was system context supplied to the model.
+- That context contained Wednesday, July 22, 2026 and America/Los_Angeles.
+- ChatGPT did not inspect the T14 or query a public time service before replying.
+- Later T14, NTP, Linux, Python, and HTTPS checks confirmed the supplied date.
+- Those checks do not reveal which internal OpenAI service created the context.
+"""
+
+
+def run(cmd: list[str], timeout: int = 180, input_text: str | None = None) -> dict:
+    try:
+        cp = subprocess.run(
+            cmd,
+            input=input_text,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+        return {
+            "cmd": cmd,
+            "returncode": cp.returncode,
+            "stdout": cp.stdout.strip(),
+            "stderr": cp.stderr.strip(),
+        }
+    except Exception as exc:
+        return {
+            "cmd": cmd,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def encrypted_timestamp() -> str:
+    """
+    Generate the required public-safe encrypted timestamp.
+
+    Public workflows fail closed when the module cannot produce a token, because
+    the user requires an encrypted timestamp in public outputs.
+    """
+    module_path = str(PUBLIC_MODULE_DIR)
+    if module_path not in sys.path:
+        sys.path.append(module_path)
+    try:
+        from datetime_crypto import get_encrypted_timestamp
+        token = get_encrypted_timestamp(agree_not_to_share=False)
+    except Exception as exc:
+        raise RuntimeError(
+            "Encrypted timestamp generation failed. Public output was blocked. "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    if not isinstance(token, str) or not token.strip():
+        raise RuntimeError("Encrypted timestamp module returned an empty token.")
+    return token.strip()
+
+
+def load_or_create_bridge_token() -> str:
+    SENSITIVE_DIR.mkdir(parents=True, exist_ok=True)
+    if TOKEN_FILE.exists():
+        token = TOKEN_FILE.read_text().strip()
+        if token:
+            return token
+    token = secrets.token_urlsafe(32)
+    TOKEN_FILE.write_text(token)
+    os.chmod(TOKEN_FILE, 0o600)
+    return token
+
+
+def sanitize_ansi(value: str) -> str:
+    import re
+    return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value)
+
+
+class BridgeState:
+    def __init__(self, app: "App") -> None:
+        self.app = app
+        self.token = load_or_create_bridge_token()
+        self.server: ThreadingHTTPServer | None = None
+        self.observations: list[dict] = []
+        self.lock = threading.Lock()
+
+    def add_observation(self, payload: dict) -> dict:
+        record = {
+            "encrypted_timestamp": encrypted_timestamp(),
+            "source": "visible Reddit page captured by user-installed Chrome extension",
+            "subreddit": str(payload.get("subreddit", ""))[:100],
+            "thread_url": str(payload.get("thread_url", ""))[:2000],
+            "thread_title": str(payload.get("thread_title", ""))[:500],
+            "post_text": str(payload.get("post_text", ""))[:20000],
+            "comments": [
+                str(item)[:5000]
+                for item in payload.get("comments", [])[:200]
+                if isinstance(item, (str, int, float))
+            ],
+            "capture_note": (
+                "This record contains only text visible in a Reddit tab the user "
+                "deliberately opened. It is not an authorized Reddit API response."
+            ),
+        }
+        with self.lock:
+            self.observations.append(record)
+        SENSITIVE_DIR.mkdir(parents=True, exist_ok=True)
+        with OBSERVATIONS_FILE.open("a") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self.app.on_reddit_observation(record)
+        return record
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "HOLFamilySourceBridge/1.0"
+
+    @property
+    def state(self) -> BridgeState:
+        return self.server.state  # type: ignore[attr-defined]
+
+    def _cors(self) -> None:
+        origin = self.headers.get("Origin", "")
+        if origin.startswith("chrome-extension://"):
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-HOL-Token")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
+    def _json(self, status: int, payload: dict) -> None:
+        data = json.dumps(payload).encode()
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _authorized(self) -> bool:
+        return secrets.compare_digest(
+            self.headers.get("X-HOL-Token", ""),
+            self.state.token,
+        )
+
+    def do_OPTIONS(self) -> None:
+        self._json(204, {})
+
+    def do_GET(self) -> None:
+        path = urlparse(self.path).path
+        if path == "/health":
+            self._json(200, {
+                "ok": True,
+                "service": "HOL Reddit Ollama bridge",
+                "port": PORT,
+            })
+            return
+        if not self._authorized():
+            self._json(401, {"ok": False, "error": "unauthorized"})
+            return
+        if path == "/encrypted-timestamp":
+            try:
+                self._json(200, {
+                    "ok": True,
+                    "encrypted_timestamp": encrypted_timestamp(),
+                })
+            except Exception as exc:
+                self._json(503, {"ok": False, "error": str(exc)})
+            return
+        if path == "/status":
+            self._json(200, {
+                "ok": True,
+                "observation_count": len(self.state.observations),
+                "github_status": STATUS_FILE.read_text() if STATUS_FILE.exists() else "not run",
+            })
+            return
+        self._json(404, {"ok": False, "error": "not found"})
+
+    def do_POST(self) -> None:
+        if not self._authorized():
+            self._json(401, {"ok": False, "error": "unauthorized"})
+            return
+        path = urlparse(self.path).path
+        if path != "/reddit-observation":
+            self._json(404, {"ok": False, "error": "not found"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 2_000_000:
+                raise ValueError("invalid request size")
+            payload = json.loads(self.rfile.read(length))
+            record = self.state.add_observation(payload)
+            self._json(200, {
+                "ok": True,
+                "encrypted_timestamp": record["encrypted_timestamp"],
+                "observation_count": len(self.state.observations),
+            })
+        except Exception as exc:
+            self._json(400, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+    def log_message(self, format: str, *args) -> None:
+        return
+
+
+def start_server(state: BridgeState) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server.state = state  # type: ignore[attr-defined]
+    state.server = server
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def python_observation(records: list[dict]) -> str:
+    if not records:
+        return "No Reddit observations have been received."
+    comment_count = sum(len(x.get("comments", [])) for x in records)
+    subreddits = sorted({x.get("subreddit", "") for x in records if x.get("subreddit")})
+    urls = [x.get("thread_url", "") for x in records if x.get("thread_url")]
+    return (
+        f"The local Python bridge received {len(records)} capture(s) containing "
+        f"{comment_count} visible comment(s). Subreddit labels: {subreddits}. "
+        f"Thread URLs: {urls}. The bridge cannot verify commenter expertise, "
+        "representativeness, identity, or whether deleted/hidden comments were omitted."
+    )
+
+
+def run_ollama(records: list[dict], irc_records: list[dict] | None = None) -> dict:
+    if not shutil.which("ollama"):
+        return {"returncode": 127, "stdout": "", "stderr": "ollama is not installed"}
+    compact = []
+    for rec in records[-10:]:
+        compact.append({
+            "encrypted_timestamp": rec.get("encrypted_timestamp"),
+            "subreddit": rec.get("subreddit"),
+            "thread_url": rec.get("thread_url"),
+            "thread_title": rec.get("thread_title"),
+            "post_text": rec.get("post_text"),
+            "comments": rec.get("comments", [])[:80],
+        })
+    irc_records = irc_records or []
+    prompt = f"""You are a local Ollama model analyzing a date-source experiment.
+
+{CHATGPT_EVIDENCE}
+
+IRC MATERIAL (nicknames redacted):
+{json.dumps(irc_records[-200:], indent=2, ensure_ascii=False)}
+
+PYTHON BRIDGE OBSERVATION:
+{python_observation(records)}
+
+VISIBLE REDDIT MATERIAL:
+{json.dumps(compact, indent=2, ensure_ascii=False)}
+
+Explain:
+1. What the Reddit participants appear to believe.
+2. Where their opinions agree or conflict.
+3. What the Python bridge directly observed.
+4. What remains impossible to prove about OpenAI's upstream date source.
+5. Whether Reddit comments add evidence, opinion, or speculation.
+
+Do not claim access to Reddit's API, ChatGPT hidden instructions, or OpenAI
+infrastructure. Clearly label observation, inference, and uncertainty.
+"""
+    result = run(["ollama", "run", MODEL], timeout=1200, input_text=prompt)
+    result["stdout"] = sanitize_ansi(result.get("stdout", ""))
+    result["prompt_encrypted_timestamp"] = encrypted_timestamp()
+    return result
+
+
+def git_upload() -> dict:
+    stamp = encrypted_timestamp()
+    if not shutil.which("git") or not shutil.which("gh"):
+        return {
+            "ok": False,
+            "status": "skipped",
+            "reason": "git or gh is missing",
+            "encrypted_timestamp": stamp,
+        }
+    auth = run(["gh", "auth", "status"], timeout=30)
+    if auth["returncode"] != 0:
+        return {
+            "ok": False,
+            "status": "skipped",
+            "reason": "gh is not authenticated",
+            "auth": auth,
+            "encrypted_timestamp": stamp,
+        }
+
+    repo_dir = APP_DIR
+    if not (repo_dir / ".git").exists():
+        temp = APP_DIR.parent / "hol-github-upload"
+        shutil.rmtree(temp, ignore_errors=True)
+        clone = run(["git", "clone", REPO_URL + ".git", str(temp)], timeout=180)
+        if clone["returncode"] != 0:
+            return {
+                "ok": False,
+                "status": "failed",
+                "clone": clone,
+                "encrypted_timestamp": stamp,
+            }
+        repo_dir = temp
+
+    source_root = Path(__file__).resolve().parent
+    names = [
+        "hol-reddit-ollama-bridge.py",
+        "run-reddit-ollama-bridge.sh",
+        "README.md",
+        "LICENSE",
+        ".gitignore",
+    ]
+    for name in names:
+        src = source_root / name
+        dst = repo_dir / name
+        if src.exists():
+            try:
+                same_file = src.resolve() == dst.resolve()
+            except FileNotFoundError:
+                same_file = False
+            if not same_file:
+                shutil.copy2(src, dst)
+
+    # Include only sanitized IRC request records created by the bot.
+    sanitized_src = SANITIZED_REQUEST_DIR
+    sanitized_dst = repo_dir / "irc-public-requests"
+    if sanitized_src.exists():
+        shutil.rmtree(sanitized_dst, ignore_errors=True)
+        shutil.copytree(sanitized_src, sanitized_dst)
+
+    src_ext = source_root / "chrome-extension"
+    dst_ext = repo_dir / "chrome-extension"
+    if src_ext.exists():
+        try:
+            same_extension_dir = src_ext.resolve() == dst_ext.resolve()
+        except FileNotFoundError:
+            same_extension_dir = False
+        if not same_extension_dir:
+            shutil.rmtree(dst_ext, ignore_errors=True)
+            shutil.copytree(src_ext, dst_ext)
+
+    run(["git", "-C", str(repo_dir), "add", "--"] + names + ["chrome-extension", "irc-public-requests"])
+    diff = run(["git", "-C", str(repo_dir), "diff", "--cached", "--quiet"])
+    commit = None
+    if diff["returncode"] == 1:
+        commit = run([
+            "git", "-C", str(repo_dir), "commit", "-m",
+            f"Add encrypted Reddit Ollama bridge | encrypted-time={stamp}",
+        ])
+    push = run(["git", "-C", str(repo_dir), "push", "origin", "main"], timeout=180)
+    return {
+        "ok": push["returncode"] == 0,
+        "status": "succeeded" if push["returncode"] == 0 else "failed",
+        "commit": commit,
+        "push": push,
+        "encrypted_timestamp": stamp,
+    }
+
+
+def build_handoff(records: list[dict], ollama: dict, github: dict, irc_records: list[dict] | None = None) -> str:
+    stamp = encrypted_timestamp()
+    irc_records = irc_records or []
+    return f"""HOL REDDIT + IRC + OLLAMA + CHATGPT HANDOFF
+
+Encrypted timestamp:
+{stamp}
+
+Repository:
+{REPO_URL}
+
+Local bridge:
+http://{HOST}:{PORT}
+
+Default subreddit configured in the extension:
+r/{DEFAULT_SUBREDDIT}
+
+Important limitation:
+The extension captures only text visible in a Reddit thread the user deliberately
+opens. Reddit comments are opinions and may not be accurate or representative.
+Neither Reddit, Python, nor Ollama can inspect OpenAI's private upstream date
+service.
+
+Python observation:
+{python_observation(records)}
+
+Reddit captures:
+{json.dumps(records, indent=2, ensure_ascii=False)}
+
+IRC captures with redacted nicknames:
+{json.dumps(irc_records, indent=2, ensure_ascii=False)}
+
+Ollama observation:
+{ollama.get("stdout", "(no Ollama output)")}
+
+Ollama encrypted timestamp:
+{ollama.get("prompt_encrypted_timestamp", "(unavailable)")}
+
+GitHub upload:
+{json.dumps(github, indent=2)}
+
+Final question for ChatGPT:
+Considering the original session-context evidence, the T14 confirmation, the
+Python bridge observation, the visible Reddit opinions, and Ollama's analysis,
+provide a final summary. Separate directly observed facts, reasonable
+inferences, public opinions, and facts that remain unknowable.
+"""
+
+
+
+
+def get_sensitive_marker() -> str:
+    """Return a stable four-character local marker such as ^A7K9^."""
+    SENSITIVE_DIR.mkdir(parents=True, exist_ok=True)
+    if SENSITIVE_MARKER_FILE.exists():
+        value = SENSITIVE_MARKER_FILE.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"\^[A-Z0-9]{4}\^", value):
+            return value
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    value = "^" + "".join(secrets.choice(alphabet) for _ in range(4)) + "^"
+    SENSITIVE_MARKER_FILE.write_text(value, encoding="utf-8")
+    os.chmod(SENSITIVE_MARKER_FILE, 0o600)
+    return value
+
+
+def redact_sensitive_text(value: str) -> str:
+    """Redact likely credentials, addresses, IPs, and home paths from diagnostics."""
+    value = str(value)
+    replacements = (
+        (r"(?i)(password|passwd|token|secret|api[_ -]?key|authorization)\s*[:=]\s*\S+", r"\1=[REDACTED]"),
+        (r"(?i)PASS\s+\S+", "PASS [REDACTED]"),
+        (r"(?i)AUTHENTICATE\s+[A-Za-z0-9+/=]{8,}", "AUTHENTICATE [REDACTED]"),
+        (r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[IP-REDACTED]"),
+        (r"\b[0-9A-Fa-f]{0,4}:[0-9A-Fa-f:]{2,}\b", "[IPV6-REDACTED]"),
+        (r"/home/[^/\s]+", "/home/[USER]"),
+        (r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[EMAIL-REDACTED]"),
+        (r"\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b", "[PHONE-REDACTED]"),
+    )
+    for pattern, replacement in replacements:
+        value = re.sub(pattern, replacement, value, flags=re.IGNORECASE)
+    return value
+
+
+def outgoing_risk_reasons(message: str) -> list[str]:
+    """Return categories that make text unsafe for IRC, Reddit, email, or GitHub."""
+    reasons: list[str] = []
+    checks = (
+        (r"(?i)\b(password|passwd|secret|api[_ -]?key|private key|sasl payload)\b", "credential material"),
+        (r"(?i)\b(date of birth|born on|medical|diagnos|iep|disability|hospital|emergency room)\b", "private personal or health information"),
+        (r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[0-9A-Fa-f]{0,4}:[0-9A-Fa-f:]{2,}\b", "network address"),
+        (r"/home/[^/\s]+|/etc/|/var/lib/|/tmp/sensitive", "local filesystem information"),
+        (r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "email address"),
+        (r"\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b", "phone number"),
+    )
+    for pattern, reason in checks:
+        if re.search(pattern, message, flags=re.IGNORECASE):
+            reasons.append(reason)
+    if re.search(r"\^[A-Z0-9]{4}\^", message):
+        reasons.append("locally marked sensitive content")
+    return sorted(set(reasons))
+
+
+def looks_obscene_channel(channel: str) -> bool:
+    lowered = channel.lower()
+    terms = ("dick", "penis", "cock", "pussy", "fuck", "shit", "asshole", "porn", "nude")
+    return any(term in lowered for term in terms)
+
+
+def classify_irc_message(message: str) -> str:
+    """Conservative local classification used only for workflow decisions."""
+    lower = message.lower()
+    if re.search(r"\b(password|shell|token|secret|debug mode|system logs?|upload|curl\s+-x|execute|run this command)\b", lower):
+        return "suspicious_request"
+    if re.search(r"\b(go away|disconnect|leave|stop posting|do not return|don't return|k-?line|ban)\b", lower):
+        return "moderation_instruction"
+    if re.search(r"#[A-Za-z0-9_+\-]+", message):
+        return "channel_recommendation"
+    if re.search(r"\b(system context|system prompt|timezone|time zone|server clock|account timezone|browser|ip address|location|date source|current date|metadata|session context)\b", lower):
+        return "relevant_answer"
+    if "?" in message:
+        return "clarifying_question"
+    if re.search(r"\b(idiot|stupid|bad bot|fuck you|shitty|dumb)\b", lower):
+        return "insult_or_unrelated"
+    return "other"
+
+
+def get_nickserv_password() -> str:
+    """
+    Retrieve the NickServ password through the local access module.
+
+    This function does not print, log, save, or modify the password.
+    """
+    if IRC_SECRET_MODULE_DIR not in sys.path:
+        sys.path.insert(0, IRC_SECRET_MODULE_DIR)
+
+    try:
+        from access_password import get_irc_password
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not import the IRC password access module from "
+            f"{IRC_SECRET_MODULE_DIR}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    try:
+        password = get_irc_password()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not retrieve the IRC password: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    if not isinstance(password, str) or not password:
+        raise RuntimeError("The IRC access module returned an empty password.")
+
+    if "\n" in password or "\r" in password:
+        raise RuntimeError("The IRC password contains a line break.")
+
+    return password
+
+
+class IRCBot:
+    """
+    Minimal TLS IRC client.
+
+    It identifies itself as a bot, asks permission before discussing the
+    project or sharing its GitHub URL, and records only messages received after
+    explicit permission to save the conversation has been granted.
+    """
+
+    def __init__(self, app: "App") -> None:
+        self.app = app
+        self.sock: ssl.SSLSocket | None = None
+        self.file = None
+        self.running = False
+        self.channel = IRC_START_CHANNEL
+        self.permission_to_participate = False
+        self.permission_to_share_github = False
+        self.permission_to_record = False
+        self.last_human_response = time.monotonic()
+        self.joined_at = 0.0
+
+        # Automatic no-response channel rotation state.
+        self.channel_rotation_generation = 0
+        self.channel_rotation_lock = threading.Lock()
+
+        # Quiet-channel watcher state. A generation change cancels older
+        # watchers when the bot moves to another channel.
+        self.quiet_watch_generation = 0
+        self.quiet_prompt_sent = False
+        self.messages: list[dict] = []
+        self.thread: threading.Thread | None = None
+
+        # IRC message-delivery diagnostic state.
+        self.echo_message_supported = False
+        self.echo_message_enabled = False
+        self.pending_echo_text: str | None = None
+        self.pending_echo_channel: str | None = None
+        self.pending_echo_received = threading.Event()
+        self.delivery_test_running = False
+        self.channel_send_restricted = False
+        self.channel_restriction_reason = ""
+
+        # Account, recommendation, evidence, and safety state.
+        self.account_identified = False
+        self.nickserv_warning = False
+        self.last_useful_response = 0.0
+        self.useful_answers: list[dict] = []
+        self.previous_channel: str | None = None
+        self.pending_recommendation: dict | None = None
+        self.recommended_trial: dict | None = None
+        self.github_shared_channels: set[str] = set()
+        self.last_manual_message_at = 0.0
+        self.debug_events: list[str] = []
+
+    def send_raw(self, line: str) -> None:
+        if not self.sock:
+            raise RuntimeError("IRC is not connected.")
+        self.sock.sendall((line + "\r\n").encode("utf-8", errors="replace"))
+
+    def privmsg(self, target: str, message: str) -> bool:
+        reasons = outgoing_risk_reasons(message)
+        if reasons:
+            self.app.status(
+                "IRC DLP blocked an outgoing message because it contained: "
+                + ", ".join(reasons)
+                + "."
+            )
+            self.debug_events.append(
+                "DLP_BLOCK " + ",".join(reasons)
+            )
+            return False
+
+        sent = False
+        for piece in message.splitlines():
+            piece = piece.strip()
+            if piece:
+                self.send_raw(f"PRIVMSG {target} :{piece[:400]}")
+                sent = True
+        return sent
+
+    def connect(self) -> None:
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def disconnect(self) -> None:
+        self.running = False
+        try:
+            self.send_raw("QUIT :SirWeSixJBO shutting down")
+        except Exception:
+            pass
+        try:
+            if self.sock:
+                self.sock.close()
+        except Exception:
+            pass
+
+    def _is_retryable_network_error(self, exc: BaseException) -> bool:
+        if isinstance(
+            exc,
+            (
+                TimeoutError,
+                ConnectionError,
+                socket.timeout,
+                socket.gaierror,
+                ssl.SSLError,
+                OSError,
+            ),
+        ):
+            return True
+
+        message = str(exc).lower()
+
+        # These are deliberate server access restrictions, not temporary
+        # connectivity failures. Do not repeatedly reconnect.
+        non_retryable_phrases = (
+            "*** banned",
+            "closing link",
+            "tlsv1 alert access denied",
+            "access denied",
+            "you are banned",
+        )
+
+        if any(phrase in message for phrase in non_retryable_phrases):
+            return False
+
+        retryable_phrases = (
+            "connection closed",
+            "connection timed out",
+            "closing link",
+            "network is unreachable",
+            "no route to host",
+            "temporary failure",
+            "name or service not known",
+            "connection reset",
+            "connection refused",
+            "broken pipe",
+            "software caused connection abort",
+            "transport endpoint",
+        )
+
+        return any(phrase in message for phrase in retryable_phrases)
+
+    def _close_irc_transport(self) -> None:
+        try:
+            if self.file is not None:
+                self.file.close()
+        except Exception:
+            pass
+        finally:
+            self.file = None
+
+        try:
+            if self.sock is not None:
+                self.sock.close()
+        except Exception:
+            pass
+        finally:
+            self.sock = None
+
+    def _interruptible_wait(self, seconds: int) -> None:
+        remaining = max(0, int(seconds))
+
+        while self.running and remaining > 0:
+            self.app.status(
+                f"IRC: reconnecting in {remaining} second"
+                + ("" if remaining == 1 else "s")
+                + "."
+            )
+            time.sleep(1)
+            remaining -= 1
+
+    def _launch_crash_handoff(self, exc: BaseException) -> None:
+        working_area = Path("/tmp/workingarea")
+        working_area.mkdir(parents=True, exist_ok=True)
+
+        report_path = working_area / "share-with-chatgpt.txt"
+
+        report = (
+            "ChatGPT, the IRC bridge encountered an unexpected programming "
+            "failure. Please diagnose it and provide a corrected patch.\n\n"
+            f"Exception type: {type(exc).__name__}\n"
+            f"Exception message: {redact_sensitive_text(str(exc))}\n\n"
+            "Traceback:\n"
+            + redact_sensitive_text(traceback.format_exc())
+            + "\n\n"
+            "Bridge file:\n"
+            "/tmp/datediag/hol-reddit-ollama-bridge.py\n\n"
+            "The NickServ password is stored separately and must not be "
+            "printed or requested.\n"
+        )
+
+        report_path.write_text(report, encoding="utf-8")
+
+        try:
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "/tmp/datediag/irc-crash-countdown.py",
+                    str(os.getpid()),
+                    str(report_path),
+                ],
+                start_new_session=True,
+            )
+        except Exception as helper_exc:
+            self.app.status(
+                "IRC crash helper could not start: "
+                f"{type(helper_exc).__name__}: {helper_exc}"
+            )
+
+    def _connect_once(self) -> None:
+        self.app.status(
+            f"IRC: connecting to {IRC_SERVER}:{IRC_PORT} with TLS."
+        )
+
+        raw = socket.create_connection(
+            (IRC_SERVER, IRC_PORT),
+            timeout=30,
+        )
+
+        context = ssl.create_default_context()
+        self.sock = context.wrap_socket(
+            raw,
+            server_hostname=IRC_SERVER,
+        )
+
+        # The connection timeout is only for establishing the connection.
+        # Once connected, allow the IRC read loop to wait indefinitely.
+        self.sock.settimeout(None)
+
+        self.file = self.sock.makefile(
+            "r",
+            encoding="utf-8",
+            errors="replace",
+            newline="\n",
+        )
+
+        password = get_nickserv_password()
+
+        # Snoonet supports authenticating during registration through the
+        # IRC server-password field using "account:password".
+        #
+        # Send PASS directly to the TLS socket so authentication material
+        # cannot be displayed by send_raw(), status output, or future logging.
+        pass_command = (
+            f"PASS {IRC_NICK}:{password}\r\n"
+        ).encode("utf-8")
+
+        self.sock.sendall(pass_command)
+
+        password = None
+        pass_command = None
+
+        self.send_raw(f"NICK {IRC_NICK}")
+        self.send_raw(f"USER {IRC_NICK} 0 * :{IRC_REALNAME}")
+
+        while self.running:
+            line = self.file.readline()
+
+            if not line:
+                raise ConnectionError("IRC connection closed.")
+
+            line = line.rstrip("\r\n")
+            self._handle_line(line)
+
+    def _run(self) -> None:
+        reconnect_delay = 5
+
+        try:
+            while self.running:
+                try:
+                    self._connect_once()
+
+                    # A normal return from _connect_once while still marked
+                    # running means the connection ended and should be retried.
+                    if self.running:
+                        raise ConnectionError("IRC connection ended.")
+
+                except Exception as exc:
+                    self._close_irc_transport()
+
+                    if not self.running:
+                        break
+
+                    if self._is_retryable_network_error(exc):
+                        self.app.status(
+                            "IRC network connection was lost: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        self.app.status(
+                            "IRC: the bot will keep retrying until connectivity "
+                            "returns."
+                        )
+
+                        self._interruptible_wait(reconnect_delay)
+                        reconnect_delay = min(reconnect_delay * 2, 60)
+                        continue
+
+                    self.app.status(
+                        "IRC unexpected failure: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    self._launch_crash_handoff(exc)
+                    break
+
+                else:
+                    reconnect_delay = 5
+
+        finally:
+            self._close_irc_transport()
+            self.running = False
+
+    def _handle_line(self, line: str) -> None:
+        if line.startswith("PING "):
+            self.send_raw("PONG " + line[5:])
+            return
+
+        if line.startswith("ERROR "):
+            self.app.status("IRC server error: " + line)
+            raise RuntimeError(line)
+
+
+        parts = line.split(" ")
+
+        # IRCv3 capability discovery. Libera.Chat may split CAP LS across
+        # multiple lines, so request SASL whenever it appears in an LS reply.
+        if " CAP " in line and " LS " in line:
+            capabilities = line.lower()
+
+            if "echo-message" in capabilities:
+                self.echo_message_supported = True
+
+            if "sasl" in capabilities:
+                requested = ["sasl"]
+
+                if self.echo_message_supported:
+                    requested.append("echo-message")
+
+                self.app.status(
+                    "IRC server advertised SASL"
+                    + (
+                        " and echo-message."
+                        if self.echo_message_supported
+                        else "."
+                    )
+                )
+
+                self.send_raw("CAP REQ :" + " ".join(requested))
+                return
+
+        if " CAP " in line and " ACK " in line:
+            acknowledged = line.lower()
+
+            if "echo-message" in acknowledged:
+                self.echo_message_enabled = True
+                self.app.status(
+                    "IRC echo-message capability accepted."
+                )
+
+            if "sasl" in acknowledged:
+                self.app.status("IRC SASL capability accepted.")
+                self.send_raw("AUTHENTICATE PLAIN")
+                return
+
+        if line.startswith("AUTHENTICATE +"):
+            password = get_nickserv_password()
+
+            # SASL PLAIN consists of:
+            # authorization identity NUL authentication identity NUL password
+            payload = (
+                IRC_NICK.encode("utf-8")
+                + b"\x00"
+                + IRC_NICK.encode("utf-8")
+                + b"\x00"
+                + password.encode("utf-8")
+            )
+
+            encoded = base64.b64encode(payload).decode("ascii")
+
+            # This script does not print or log the encoded authentication line.
+            self.send_raw(f"AUTHENTICATE {encoded}")
+
+            password = None
+            payload = None
+            encoded = None
+            return
+
+        # Libera normally sends both:
+        # 900 = account login confirmed
+        # 903 = SASL exchange completed successfully
+        #
+        # CAP END must be sent only once, after numeric 903.
+        if len(parts) >= 2 and parts[1] == "900":
+            self.account_identified = True
+            self.nickserv_warning = False
+            self.app.status(
+                f"IRC account login confirmed as {IRC_NICK}."
+            )
+            return
+
+        if len(parts) >= 2 and parts[1] == "903":
+            self.app.status(
+                f"IRC SASL authentication succeeded as {IRC_NICK}."
+            )
+            self.send_raw("CAP END")
+            return
+
+        # Libera SASL failure numerics.
+        if len(parts) >= 2 and parts[1] in {
+            "904", "905", "906", "907", "908"
+        }:
+            try:
+                self.send_raw("CAP END")
+            except Exception:
+                pass
+
+            raise RuntimeError(
+                "SASL authentication failed. Confirm that SirWeSixJBO is "
+                "registered and that the locally stored password is correct."
+            )
+
+        if len(parts) >= 2 and parts[1] == "001":
+            self.app.status(
+                f"IRC registration completed as {IRC_NICK}. "
+                "Account identification will be tracked separately."
+            )
+            self.join_channel(IRC_START_CHANNEL)
+            return
+
+        # Join the starting channel only after NickServ confirms that this
+        # connection is identified to the registered account.
+        identified_messages = (
+            "you are now identified for",
+            "you are already logged in as",
+            "you are successfully identified as",
+            "password accepted",
+        )
+
+        if (
+            "NickServ" in line
+            and any(
+                phrase in line.lower()
+                for phrase in identified_messages
+            )
+        ):
+            self.app.status(
+                f"IRC NickServ identification succeeded as {IRC_NICK}. "
+                f"Joining {IRC_START_CHANNEL}."
+            )
+            self.join_channel(IRC_START_CHANNEL)
+            return
+
+        nickserv_failure_messages = (
+            "password incorrect",
+            "invalid password",
+            "authentication failed",
+            "is not registered",
+        )
+
+        if (
+            "NickServ" in line
+            and any(
+                phrase in line.lower()
+                for phrase in nickserv_failure_messages
+            )
+        ):
+            # Do not crash immediately. Show the exact server notice so the
+            # operator can distinguish a real password rejection from an
+            # unrelated NickServ message.
+            self.nickserv_warning = True
+            self.debug_events.append(
+                "NICKSERV_WARNING " + redact_sensitive_text(line)
+            )
+            self.app.status(
+                "IRC NickServ warning recorded. The bot will continue, but "
+                "registered-only channels may reject it."
+            )
+            return
+
+        # Topic, membership, channel restriction, and send diagnostics.
+        if len(parts) >= 2 and parts[1] in {
+            "324",  # current channel modes
+            "329",  # channel creation time
+            "332",  # channel topic
+            "333",  # topic metadata
+            "367",  # ban-list entry
+            "368",  # end of ban list
+            "404",  # cannot send to channel
+            "442",  # not on channel
+            "471",  # channel is full
+            "473",  # invite-only channel
+            "474",  # banned from channel
+            "475",  # bad channel key
+            "477",  # channel restriction
+            "482",  # not a channel operator
+            "489",  # secure-only restriction
+        }:
+            numeric = parts[1]
+            reason_names = {
+                "404": "cannot send to channel",
+                "442": "not currently on channel",
+                "471": "channel is full",
+                "473": "invite-only channel",
+                "474": "banned from channel",
+                "475": "incorrect channel key",
+                "477": "channel restriction",
+                "482": "not a channel operator",
+                "489": "TLS or secure-only restriction",
+            }
+
+            self.app.status("IRC server/channel notice: " + redact_sensitive_text(line))
+
+            if numeric in reason_names:
+                self.channel_send_restricted = True
+                self.channel_restriction_reason = reason_names[numeric]
+
+                self.app.status(
+                    "IRC diagnostic: channel communication may be restricted: "
+                    + self.channel_restriction_reason
+                )
+
+            return
+
+        if " KICK " in line:
+            self.channel_send_restricted = True
+            self.channel_restriction_reason = "removed from channel with KICK"
+            self.app.status("IRC channel event: " + line)
+            return
+
+        if " MODE " in line:
+            self.app.status("IRC channel event: " + redact_sensitive_text(line))
+
+            if re.search(rf"MODE\s+{re.escape(IRC_NICK)}\s+.*\+[^ ]*r", line, flags=re.IGNORECASE):
+                self.account_identified = True
+                self.nickserv_warning = False
+                self.app.status("IRC account mode +r confirms registered-account identification.")
+
+            # Common communication-related modes:
+            #
+            # +m = moderated; only voiced or opped users may speak
+            # +q = quiet mask; matching users remain joined but cannot speak
+            # +R = only identified accounts may speak
+            # +b = ban mask
+            #
+            # A raw MODE line alone may not prove that a particular mask matches
+            # this bot, so these are reported as possible restrictions.
+            if " +m" in line:
+                self.app.status(
+                    "IRC diagnostic: channel is moderated (+m). "
+                    "Unvoiced users may be unable to speak."
+                )
+
+            if " +q" in line:
+                self.app.status(
+                    "IRC diagnostic: a quiet mask (+q) was added. "
+                    "It may or may not match this account."
+                )
+
+            if " +R" in line:
+                self.app.status(
+                    "IRC diagnostic: channel permits speaking only by "
+                    "identified accounts (+R)."
+                )
+
+            if " +b" in line:
+                self.app.status(
+                    "IRC diagnostic: a ban mask (+b) was added. "
+                    "It may or may not match this account."
+                )
+
+        match = re.match(r"^:([^!]+)![^ ]+ PRIVMSG ([^ ]+) :(.*)$", line)
+        if not match:
+            return
+
+        nick, target, message = match.groups()
+
+        if nick.lower() == IRC_NICK.lower():
+            if (
+                self.pending_echo_text is not None
+                and target.lower()
+                == (self.pending_echo_channel or "").lower()
+                and message == self.pending_echo_text
+            ):
+                self.pending_echo_received.set()
+                self.app.status(
+                    f"IRC diagnostic: server echoed the message in {target}; "
+                    "delivery was accepted."
+                )
+
+            return
+
+        self.last_human_response = time.monotonic()
+        category = classify_irc_message(message)
+        self.app.on_irc_message(nick, target, message)
+        self.app.status(f"IRC classification: {category}.")
+
+        if category == "relevant_answer":
+            self.last_useful_response = time.monotonic()
+            evidence = {
+                "channel": target,
+                "nickname_redacted": hashlib.sha256(nick.encode()).hexdigest()[:12],
+                "message": message[:2000],
+                "received_monotonic": self.last_useful_response,
+            }
+            self.useful_answers.append(evidence)
+            self.app.on_useful_irc_answer(evidence)
+
+        if category == "suspicious_request":
+            self._handle_suspicious_request(nick, target, message)
+
+        lower = message.lower()
+
+        # Moderation or operator-direction messages are recorded for the user.
+        # EDITABLE RESPONSE: change only the quoted text if you want a different
+        # one-time acknowledgement. This block does not disconnect or alter the
+        # rest of the bot's workflow.
+        if classify_irc_message(message) == "moderation_instruction":
+            self.debug_events.append(
+                "MODERATION_INSTRUCTION " + redact_sensitive_text(message[:500])
+            )
+            self.app.status(
+                "IRC: moderation-style instruction recorded for operator review."
+            )
+
+        # Natural-language permission recognition. The GUI also provides
+        # explicit buttons so the user can override ambiguous replies.
+        if any(phrase in lower for phrase in (
+            "bot is allowed", "bots are allowed", "yes, the bot", "bot may",
+            "okay for the bot", "ok for the bot", "you can ask here",
+        )):
+            self.permission_to_participate = True
+            self.privmsg(
+                self.channel,
+                "Thank you. I am SirWeSixJBO, a Python bot written by ChatGPT "
+                "for Jeremiah O'Neal. May I save replies locally for this one "
+                "troubleshooting experiment? I will not publish nicknames.",
+            )
+
+        if any(phrase in lower for phrase in (
+            "you may log", "you can log", "may save", "can save replies",
+            "logging is okay", "logging is ok",
+        )):
+            self.permission_to_record = True
+            self.privmsg(
+                self.channel,
+                "Thank you. May I share the public source-code link in this channel?",
+            )
+
+        if any(phrase in lower for phrase in (
+            "share the link", "github link is okay", "github link is ok",
+            "you may share", "link is fine", "link is okay", "link is ok",
+        )):
+            self.permission_to_share_github = True
+            self.ask_main_question()
+
+        # A bare channel mention is a recommendation, not immediate permission
+        # to roam. Ask the recommender for context before considering a visit.
+        channels = re.findall(r"(?<!\w)(#{1,3}[A-Za-z0-9_+\-]+)", message)
+        if channels and nick.lower() != IRC_NICK.lower():
+            self._begin_channel_recommendation(nick, target, channels[0])
+
+        # A pending recommender may answer the context question in a later line.
+        self._consider_recommendation_context(nick, target, message)
+
+        if self.permission_to_record:
+            record = {
+                "encrypted_timestamp": encrypted_timestamp(),
+                "network": IRC_SERVER,
+                "channel": target,
+                "nickname_redacted": hashlib.sha256(nick.encode()).hexdigest()[:12],
+                "message": message[:4000],
+            }
+            self.messages.append(record)
+            SENSITIVE_DIR.mkdir(parents=True, exist_ok=True)
+            with IRC_LOG_FILE.open("a") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def _begin_channel_recommendation(self, nick: str, target: str, channel: str) -> None:
+        if self.pending_recommendation and self.pending_recommendation.get("channel", "").lower() == channel.lower():
+            return
+        self.pending_recommendation = {
+            "channel": channel,
+            "nick_hash": hashlib.sha256(nick.encode()).hexdigest()[:12],
+            "nick": nick,
+            "origin": target,
+            "requested_at": time.monotonic(),
+            "reason": "",
+        }
+        self.privmsg(
+            target,
+            f"Before I visit {channel}, what is that channel about, and are bots allowed there?",
+        )
+        self.app.status(f"IRC: requested context before considering {channel}.")
+        threading.Thread(target=self._expire_recommendation, args=(channel,), daemon=True).start()
+
+    def _expire_recommendation(self, channel: str) -> None:
+        time.sleep(IRC_RECOMMENDATION_INFO_SECONDS)
+        pending = self.pending_recommendation
+        if pending and pending.get("channel", "").lower() == channel.lower() and not pending.get("reason"):
+            self.app.status(f"IRC: ignored {channel}; no explanation was provided.")
+            self.pending_recommendation = None
+
+    def _consider_recommendation_context(self, nick: str, target: str, message: str) -> None:
+        pending = self.pending_recommendation
+        if not pending:
+            return
+        if hashlib.sha256(nick.encode()).hexdigest()[:12] != pending.get("nick_hash"):
+            return
+        if target.lower() != str(pending.get("origin", "")).lower():
+            return
+        if message.strip().lower() == pending.get("channel", "").lower():
+            return
+
+        lower = message.lower()
+        bot_signal = any(term in lower for term in ("bot", "bots", "automation", "allowed", "permitted", "okay", "ok"))
+        topic_signal = len(message.strip()) >= 12
+        if not (bot_signal and topic_signal):
+            return
+
+        pending["reason"] = message[:500]
+        channel = str(pending["channel"])
+        self.pending_recommendation = None
+        if looks_obscene_channel(channel):
+            self.privmsg(
+                target,
+                f"I feel that {channel} has an inappropriate name, but I will briefly check whether there is a legitimate reason I was directed there.",
+            )
+        else:
+            self.privmsg(target, f"Thank you. I will briefly visit {channel} and then return if it is not useful.")
+        self._visit_recommended_channel(channel, target, pending["reason"])
+
+    def _visit_recommended_channel(self, channel: str, origin: str, reason: str) -> None:
+        self.previous_channel = self.channel
+        self.recommended_trial = {
+            "channel": channel,
+            "origin": origin,
+            "previous": self.previous_channel,
+            "reason": reason,
+            "started": time.monotonic(),
+            "reference": self.last_useful_response,
+        }
+        self.switch_channel(channel)
+        threading.Thread(target=self._recommended_channel_trial, args=(channel,), daemon=True).start()
+
+    def _recommended_channel_trial(self, channel: str) -> None:
+        time.sleep(IRC_RECOMMENDED_TRIAL_SECONDS)
+        trial = self.recommended_trial
+        if not trial or str(trial.get("channel", "")).lower() != channel.lower():
+            return
+        if self.last_useful_response > float(trial.get("reference", 0.0)):
+            self.app.status(f"IRC: useful evidence was found in recommended channel {channel}.")
+            return
+        self.privmsg(channel, "Why did you recommend that I come here?")
+        reference = self.last_useful_response
+        time.sleep(IRC_RECOMMENDED_TRIAL_SECONDS)
+        if self.last_useful_response > reference:
+            return
+        previous = str(trial.get("previous") or IRC_START_CHANNEL)
+        self.app.status(f"IRC: no useful result in {channel}; returning to {previous}.")
+        try:
+            self.send_raw(f"PART {channel} :Returning to previous channel")
+        except Exception:
+            pass
+        self.recommended_trial = None
+        self.join_channel(previous)
+
+    def _handle_suspicious_request(self, nick: str, target: str, message: str) -> None:
+        lower = message.lower()
+        if any(term in lower for term in ("password", "shell", "token", "secret", "private key", "system log", "debug mode")):
+            self.privmsg(
+                target,
+                "That request is inappropriate because it could expose credentials, private system information, or local access details. I can provide a sanitized public explanation through the project repository, but I will not reveal or execute sensitive material.",
+            )
+            return
+
+        channel_key = target.lower()
+        if channel_key in self.github_shared_channels:
+            return
+        self.github_shared_channels.add(channel_key)
+        SANITIZED_REQUEST_DIR.mkdir(parents=True, exist_ok=True)
+        marker = get_sensitive_marker()
+        safe_request = redact_sensitive_text(message[:1000])
+        filename = f"request-{int(time.time())}-{secrets.token_hex(2)}.txt"
+        path = SANITIZED_REQUEST_DIR / filename
+        path.write_text(
+            f"{marker}\nChannel: {target}\nRequest type: sanitized IRC code-information request\n"
+            f"Request: {safe_request}\nNo commands were executed. No credentials, private logs, or personal data were included.\n{marker}\n",
+            encoding="utf-8",
+        )
+        self.app.status(f"IRC: created sanitized request record {filename}; no IRC-supplied command was executed.")
+        threading.Thread(target=self.app._upload_sanitized_request, args=(path, target), daemon=True).start()
+
+    def build_debug_report(self, reason: str) -> str:
+        marker = get_sensitive_marker()
+        report = {
+            "marker": marker,
+            "reason": reason,
+            "server": IRC_SERVER,
+            "channel": self.channel,
+            "running": self.running,
+            "account_identified": self.account_identified,
+            "nickserv_warning": self.nickserv_warning,
+            "permission_to_participate": self.permission_to_participate,
+            "permission_to_record": self.permission_to_record,
+            "permission_to_share_github": self.permission_to_share_github,
+            "useful_answer_count": len(self.useful_answers),
+            "pending_recommendation": self.pending_recommendation,
+            "recommended_trial": self.recommended_trial,
+            "recent_debug_events": self.debug_events[-50:],
+        }
+        return marker + "\n" + redact_sensitive_text(json.dumps(report, indent=2)) + "\n" + marker + "\n"
+
+    def request_channel_diagnostics(self) -> None:
+        """
+        Ask the IRC server for the current channel modes and common restriction
+        lists. Results appear in the Tk status area.
+        """
+        if not self.running or not self.sock:
+            self.app.status(
+                "IRC diagnostic: the bot is not connected."
+            )
+            return
+
+        if not self.channel:
+            self.app.status(
+                "IRC diagnostic: no current channel is selected."
+            )
+            return
+
+        self.app.status(
+            f"IRC diagnostic: requesting modes and restriction lists for "
+            f"{self.channel}."
+        )
+
+        self.send_raw(f"MODE {self.channel}")
+        self.send_raw(f"MODE {self.channel} b")
+        self.send_raw(f"MODE {self.channel} q")
+
+        self.app.status(
+            "IRC diagnostic mode reference: "
+            "+m means moderated; +q means quiet; +R restricts speaking to "
+            "identified accounts; +b is a ban mask; +v is voice."
+        )
+
+    def start_delivery_diagnostic(self) -> None:
+        if self.delivery_test_running:
+            self.app.status(
+                "IRC diagnostic: a delivery test is already running."
+            )
+            return
+
+        threading.Thread(
+            target=self._run_delivery_diagnostic,
+            daemon=True,
+        ).start()
+
+    def _run_delivery_diagnostic(self) -> None:
+        self.delivery_test_running = True
+        self.channel_send_restricted = False
+        self.channel_restriction_reason = ""
+
+        try:
+            if not self.running or not self.sock:
+                self.app.status(
+                    "IRC diagnostic: the bot is not connected."
+                )
+                return
+
+            if not self.channel:
+                self.app.status(
+                    "IRC diagnostic: no current channel is selected."
+                )
+                return
+
+            self.request_channel_diagnostics()
+
+            if not self.echo_message_enabled:
+                self.app.status(
+                    "IRC diagnostic: echo-message was not negotiated. "
+                    "A missing echo cannot be used as proof of muting."
+                )
+                return
+
+            for attempt in (1, 2):
+                test_text = (
+                    f"IRC delivery diagnostic {int(time.time())}, "
+                    f"attempt {attempt}."
+                )
+
+                self.pending_echo_text = test_text
+                self.pending_echo_channel = self.channel
+                self.pending_echo_received.clear()
+
+                self.app.status(
+                    f"IRC diagnostic: sending delivery test {attempt} of 2."
+                )
+
+                self.privmsg(self.channel, test_text)
+
+                if self.pending_echo_received.wait(timeout=10):
+                    self.app.status(
+                        "IRC diagnostic result: message delivery is working."
+                    )
+                    return
+
+                if self.channel_send_restricted:
+                    self.app.status(
+                        "IRC diagnostic result: the server reported a channel "
+                        "restriction: "
+                        + self.channel_restriction_reason
+                    )
+                    break
+
+                if attempt == 1:
+                    self.app.status(
+                        "IRC diagnostic: no echo after 10 seconds. "
+                        "Waiting briefly and trying once more."
+                    )
+                    time.sleep(10)
+
+            self.app.status(
+                "IRC diagnostic result: two delivery attempts were not echoed. "
+                "The bot may be quieted, blocked by channel modes, filtered, "
+                "or experiencing a connection problem."
+            )
+
+            # Leave only the current channel. Keep the IRC connection alive.
+            #
+            # This intentionally does not automatically join another unrelated
+            # channel. Choose the next destination manually after reviewing
+            # the diagnostic output.
+            try:
+                self.send_raw(
+                    f"PART {self.channel} :Delivery diagnostic failed"
+                )
+                self.app.status(
+                    f"IRC diagnostic: left {self.channel}. "
+                    "Select another channel manually."
+                )
+            except Exception as exc:
+                self.app.status(
+                    "IRC diagnostic: could not leave the channel: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        except Exception as exc:
+            self.app.status(
+                "IRC diagnostic failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+        finally:
+            self.pending_echo_text = None
+            self.pending_echo_channel = None
+            self.pending_echo_received.clear()
+            self.delivery_test_running = False
+
+    def join_channel(self, channel: str) -> None:
+        self.channel = channel
+        self.permission_to_participate = False
+        self.permission_to_share_github = False
+        self.permission_to_record = False
+        self.joined_at = time.monotonic()
+        self.last_human_response = self.joined_at
+        self.send_raw(f"JOIN {channel}")
+
+        # Incrementing this value invalidates older channel timers.
+        with self.channel_rotation_lock:
+            self.channel_rotation_generation += 1
+            generation = self.channel_rotation_generation
+
+        threading.Thread(
+            target=self._announce_after_join,
+            daemon=True,
+        ).start()
+
+        threading.Thread(
+            target=self._rotate_after_no_response,
+            args=(channel, generation),
+            daemon=True,
+        ).start()
+
+        # Start a separate inactivity watcher. This watches for a channel that
+        # had activity and then becomes quiet.
+        self.quiet_watch_generation += 1
+        quiet_generation = self.quiet_watch_generation
+        self.quiet_prompt_sent = False
+
+        threading.Thread(
+            target=self._watch_channel_quietness,
+            args=(channel, quiet_generation),
+            daemon=True,
+        ).start()
+
+    def _announce_after_join(self) -> None:
+        time.sleep(4)
+        if not self.running:
+            return
+        self.privmsg(
+            self.channel,
+            "Hello everyone, I have a simple question. I am here to ask one "
+            "technical question about how ChatGPT receives the current date and "
+            "timezone. Is a bot allowed to ask that here? If not, which IRC "
+            "channel should I use?",
+        )
+        self.privmsg(
+            self.channel,
+            "I have public source code, but I will not post the GitHub link unless "
+            "someone confirms that sharing it is allowed.",
+        )
+        threading.Thread(target=self._wait_for_response, daemon=True).start()
+
+    def _wait_for_response(self) -> None:
+        deadline = time.monotonic() + IRC_WAIT_SECONDS
+        while self.running and time.monotonic() < deadline:
+            if self.permission_to_participate or self.last_human_response > self.joined_at:
+                return
+            time.sleep(5)
+        if self.running and not self.permission_to_participate:
+            self.app.status(
+                f"IRC: no response in {self.channel} after 10 minutes. "
+                "The bot will not join another ordinary channel without an "
+                "explicit recommendation or topic permission."
+            )
+
+    def _next_rotation_channel(self, current: str) -> str | None:
+        """
+        Return the next configured channel.
+
+        Edit IRC_CHANNEL_ROTATION near the top of the file to change the
+        destinations. A channel is not selected from the public channel list.
+        """
+        channels = [
+            channel
+            for channel in IRC_CHANNEL_ROTATION
+            if isinstance(channel, str) and channel.startswith("#")
+        ]
+
+        if len(channels) < 2:
+            return None
+
+        lowered = [channel.lower() for channel in channels]
+
+        try:
+            current_index = lowered.index(current.lower())
+        except ValueError:
+            return channels[0]
+
+        return channels[(current_index + 1) % len(channels)]
+
+    def _rotate_after_no_response(
+        self,
+        watched_channel: str,
+        generation: int,
+    ) -> None:
+        """
+        Wait two minutes after joining. Rotate only when no human has replied.
+
+        A new channel join invalidates this timer through the generation value.
+        """
+        deadline = time.monotonic() + IRC_NO_RESPONSE_SECONDS
+
+        while self.running and time.monotonic() < deadline:
+            with self.channel_rotation_lock:
+                if generation != self.channel_rotation_generation:
+                    return
+
+            if self.channel.lower() != watched_channel.lower():
+                return
+
+            if self.last_human_response > self.joined_at:
+                self.app.status(
+                    f"IRC: a human responded in {watched_channel}; "
+                    "automatic channel rotation was cancelled."
+                )
+                return
+
+            time.sleep(2)
+
+        if not self.running:
+            return
+
+        with self.channel_rotation_lock:
+            if generation != self.channel_rotation_generation:
+                return
+
+        if self.channel.lower() != watched_channel.lower():
+            return
+
+        if self.last_human_response > self.joined_at:
+            return
+
+        next_channel = self._next_rotation_channel(watched_channel)
+
+        if next_channel is None:
+            self.app.status(
+                "IRC: no human response after two minutes, but no second "
+                "channel is configured in IRC_CHANNEL_ROTATION."
+            )
+            return
+
+        self.app.status(
+            f"IRC: no human response in {watched_channel} after two minutes. "
+            f"Moving to {next_channel}."
+        )
+
+        try:
+            self.privmsg(
+                watched_channel,
+                "Well, no one is talking, so I'll try a different channel.",
+            )
+        except Exception as exc:
+            self.app.status(
+                "IRC: could not send the departure message: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+        time.sleep(2)
+
+        if not self.running:
+            return
+
+        try:
+            self.send_raw(
+                f"PART {watched_channel} :No response after two minutes"
+            )
+        except Exception as exc:
+            self.app.status(
+                "IRC: could not part the quiet channel cleanly: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+        self.join_channel(next_channel)
+
+    def _watch_channel_quietness(
+        self,
+        watched_channel: str,
+        generation: int,
+    ) -> None:
+        """
+        Ask once after five quiet minutes. If there is still no human response
+        after another two minutes, leave and move to the next configured
+        channel.
+
+        Server notices and the bot's own echoed messages do not count as human
+        activity because last_human_response is updated only for other users'
+        PRIVMSG messages.
+        """
+        while self.running:
+            if generation != self.quiet_watch_generation:
+                return
+
+            if self.channel.lower() != watched_channel.lower():
+                return
+
+            quiet_for = time.monotonic() - self.last_human_response
+
+            if quiet_for < IRC_QUIET_PROMPT_SECONDS:
+                time.sleep(2)
+                continue
+
+            # Ask only once during this quiet period.
+            if not self.quiet_prompt_sent:
+                self.quiet_prompt_sent = True
+                response_reference = self.last_human_response
+
+                self.app.status(
+                    f"IRC: {watched_channel} has been quiet for "
+                    f"{IRC_QUIET_PROMPT_SECONDS // 60} minutes. "
+                    "Asking whether anyone is present."
+                )
+
+                try:
+                    self.privmsg(
+                        watched_channel,
+                        "Is anyone alive in here?",
+                    )
+                except Exception as exc:
+                    self.app.status(
+                        "IRC: could not send the quiet-channel message: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    return
+
+                deadline = time.monotonic() + IRC_QUIET_DEPART_SECONDS
+
+                while self.running and time.monotonic() < deadline:
+                    if generation != self.quiet_watch_generation:
+                        return
+
+                    if self.channel.lower() != watched_channel.lower():
+                        return
+
+                    # A real human replied after the prompt.
+                    if self.last_human_response > response_reference:
+                        self.app.status(
+                            f"IRC: someone responded in {watched_channel}; "
+                            "the planned channel move was cancelled."
+                        )
+
+                        self.quiet_prompt_sent = False
+                        break
+
+                    time.sleep(2)
+
+                else:
+                    if not self.running:
+                        return
+
+                    if generation != self.quiet_watch_generation:
+                        return
+
+                    if self.channel.lower() != watched_channel.lower():
+                        return
+
+                    if self.last_human_response > response_reference:
+                        self.quiet_prompt_sent = False
+                        continue
+
+                    next_channel = self._next_rotation_channel(
+                        watched_channel
+                    )
+
+                    if next_channel is None:
+                        self.app.status(
+                            "IRC: the channel stayed quiet, but no next "
+                            "channel is configured."
+                        )
+                        return
+
+                    self.app.status(
+                        f"IRC: no response in {watched_channel} after the "
+                        f"additional {IRC_QUIET_DEPART_SECONDS // 60}-minute "
+                        f"wait. Moving to {next_channel}."
+                    )
+
+                    try:
+                        self.privmsg(
+                            watched_channel,
+                            "Well, it got quiet again, so I'll visit "
+                            "another channel.",
+                        )
+                    except Exception as exc:
+                        self.app.status(
+                            "IRC: could not send the departure message: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+
+                    time.sleep(2)
+
+                    if not self.running:
+                        return
+
+                    try:
+                        self.send_raw(
+                            f"PART {watched_channel} "
+                            ":Channel became quiet"
+                        )
+                    except Exception as exc:
+                        self.app.status(
+                            "IRC: could not part the quiet channel cleanly: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+
+                    self.join_channel(next_channel)
+                    return
+
+            time.sleep(2)
+
+    def switch_channel(self, channel: str) -> None:
+        try:
+            self.send_raw(f"PART {self.channel} :Moving to recommended channel")
+        except Exception:
+            pass
+        self.join_channel(channel)
+
+    def ask_main_question(self) -> None:
+        if not (self.permission_to_participate and self.permission_to_record):
+            self.app.status("IRC: permission to participate and record is still required.")
+            return
+
+        self.privmsg(
+            self.channel,
+            "Hello everyone. I have a question about ChatGPT's ability to know "
+            "the current date and time for my location. I used to tell ChatGPT "
+            "the date myself, but now it seems to already know.",
+        )
+        self.privmsg(
+            self.channel,
+            "I understand the date may be included in system context, but I am "
+            "trying to understand what creates that information. Could it come "
+            "from a server clock, account timezone, browser information, IP-based "
+            "location, or another part of the hosting platform?",
+        )
+        if self.permission_to_share_github:
+            self.privmsg(
+                self.channel,
+                "Source code for this troubleshooting bot: "
+                + REPO_URL,
+            )
+        self._log_friendly_social_message()
+
+    def _log_friendly_social_message(self) -> None:
+        FRIENDLY_POST_LOG.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "platform": "irc",
+            "destination": self.channel,
+            "encrypted_timestamp": encrypted_timestamp(),
+            "public_message_contains_encrypted_timestamp": False,
+            "bot_identity": IRC_NICK,
+            "source_url_shared": self.permission_to_share_github,
+        }
+        with FRIENDLY_POST_LOG.open("a") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def send_manual_irc_message(app, message: str) -> None:
+    """Send one manually selected message to the current IRC channel."""
+    try:
+        if not app.irc.running or not app.irc.sock:
+            app.status(
+                "IRC: cannot send the message because the bot is not connected."
+            )
+            return
+
+        channel = app.irc.channel
+
+        if not channel:
+            app.status(
+                "IRC: cannot send the message because no channel is selected."
+            )
+            return
+
+        now = time.monotonic()
+        wait_left = MANUAL_MESSAGE_COOLDOWN_SECONDS - (now - app.irc.last_manual_message_at)
+        if wait_left > 0:
+            app.status(f"IRC: manual-message cooldown active for {int(wait_left) + 1} more seconds.")
+            return
+        if app.irc.privmsg(channel, message):
+            app.irc.last_manual_message_at = now
+            app.status(f"IRC: manually sent to {channel}: {message}")
+
+    except Exception as exc:
+        app.status(
+            "IRC: manual message failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
+def send_random_irc_message(app) -> None:
+    """
+    Choose and send one casual IRC message.
+
+    Add, remove, or rewrite entries in this tuple to customize the button.
+    """
+    messages = (
+        "Why is the channel so quiet?",
+        "So, why isn't anyone responding to me?",
+        "Is anyone around?",
+        "Did everyone go AFK?",
+        "This channel is impressively quiet.",
+        "Hello? Is this thing on?",
+        "I appear to be talking to myself.",
+        "Does anyone here have a moment for a technical question?",
+    )
+
+    send_manual_irc_message(
+        app,
+        random.choice(messages),
+    )
+
+
+class App:
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.root.title("HOL Reddit + Ollama Date Bridge")
+        self.root.geometry("1100x820")
+        self.state = BridgeState(self)
+        self.server: ThreadingHTTPServer | None = None
+        self.handoff = ""
+        self.irc = IRCBot(self)
+
+        # Overall IRC experiment fallback. This is separate from the
+        # shorter per-channel rotation timers.
+        self.irc_fallback_started_at = time.monotonic()
+        self.irc_fallback_opened = False
+
+        threading.Thread(
+            target=self._watch_for_reddit_fallback,
+            daemon=True,
+        ).start()
+
+        irc_diagnostic_frame = tk.LabelFrame(
+            root,
+            text="IRC Diagnostics",
+            padx=8,
+            pady=8,
+        )
+        irc_diagnostic_frame.pack(
+            fill="x",
+            padx=12,
+            pady=(8, 2),
+        )
+
+        tk.Button(
+            irc_diagnostic_frame,
+            text="Check Channel Modes",
+            command=self.irc.request_channel_diagnostics,
+        ).pack(
+            side="left",
+            padx=5,
+        )
+
+        tk.Button(
+            irc_diagnostic_frame,
+            text="Test Message Delivery",
+            command=self.irc.start_delivery_diagnostic,
+        ).pack(
+            side="left",
+            padx=5,
+        )
+
+        manual_irc_frame = tk.LabelFrame(
+            root,
+            text="Manual IRC Messages",
+            padx=8,
+            pady=8,
+        )
+        manual_irc_frame.pack(
+            fill="x",
+            padx=12,
+            pady=(8, 2),
+        )
+
+        tk.Button(
+            manual_irc_frame,
+            text="Why so quiet?",
+            command=lambda: send_manual_irc_message(
+                self,
+                "Why is the channel so quiet?",
+            ),
+        ).pack(
+            side="left",
+            padx=5,
+        )
+
+        tk.Button(
+            manual_irc_frame,
+            text="Why no response?",
+            command=lambda: send_manual_irc_message(
+                self,
+                "So, why isn't anyone responding to me?",
+            ),
+        ).pack(
+            side="left",
+            padx=5,
+        )
+
+        tk.Button(
+            manual_irc_frame,
+            text="Send Random Message",
+            command=lambda: send_random_irc_message(self),
+        ).pack(
+            side="left",
+            padx=5,
+        )
+
+        tk.Label(
+            root,
+            text=(
+                "Reserves 127.0.0.1:2526, receives visible Reddit thread text from "
+                "the companion Chrome extension, timestamps public records with the "
+                "encrypted timestamp module, runs Ollama, and prepares a ChatGPT handoff."
+            ),
+            wraplength=1050,
+            justify="left",
+        ).pack(fill="x", padx=12, pady=10)
+
+        form = tk.Frame(root)
+        form.pack(fill="x", padx=12)
+
+        tk.Label(form, text="Bridge address:").grid(row=0, column=0, sticky="w")
+        self.address = tk.Entry(form, width=45)
+        self.address.insert(0, f"http://{HOST}:{PORT}")
+        self.address.configure(state="readonly")
+        self.address.grid(row=0, column=1, sticky="w", padx=8)
+
+        tk.Label(form, text="Bridge token:").grid(row=1, column=0, sticky="w")
+        self.token_entry = tk.Entry(form, width=70, show="•")
+        self.token_entry.insert(0, self.state.token)
+        self.token_entry.configure(state="readonly")
+        self.token_entry.grid(row=1, column=1, sticky="w", padx=8)
+        tk.Button(form, text="Copy Token", command=self.copy_token).grid(row=1, column=2)
+
+        tk.Label(form, text="Encrypted timestamp:").grid(row=2, column=0, sticky="w")
+        self.timestamp_var = tk.StringVar(value="Not generated yet")
+        tk.Entry(form, textvariable=self.timestamp_var, width=70, state="readonly").grid(
+            row=2, column=1, sticky="w", padx=8
+        )
+        tk.Button(form, text="Generate / Copy", command=self.copy_timestamp).grid(row=2, column=2)
+
+        buttons = tk.Frame(root)
+        buttons.pack(fill="x", padx=12, pady=10)
+        tk.Button(buttons, text="Run Ollama on Reddit Evidence", command=self.analyze).pack(side="left")
+        tk.Button(buttons, text="Upload Source to GitHub", command=self.upload).pack(side="left", padx=8)
+        tk.Button(buttons, text="Copy Final Handoff", command=self.copy_handoff).pack(side="left")
+        tk.Button(buttons, text="Open Extension Folder", command=self.open_extension).pack(side="left", padx=8)
+        tk.Button(buttons, text="Connect IRC Bot", command=self.irc.connect).pack(side="left", padx=8)
+        tk.Button(buttons, text="Disconnect IRC", command=self.irc.disconnect).pack(side="left")
+        tk.Button(buttons, text="Request New Version", command=self.request_new_version).pack(side="left", padx=8)
+        tk.Button(buttons, text="Open Reddit Workflow", command=self._open_reddit_fallback_window).pack(side="left")
+
+        self.status_var = tk.StringVar(value="Starting localhost bridge...")
+        tk.Label(root, textvariable=self.status_var, anchor="w").pack(fill="x", padx=12)
+
+        self.output = scrolledtext.ScrolledText(root, wrap="word")
+        self.output.pack(fill="both", expand=True, padx=12, pady=12)
+        self.output.insert("1.0", CHATGPT_EVIDENCE)
+
+        try:
+            self.server = start_server(self.state)
+            self.status("Bridge is listening on 127.0.0.1:2526.")
+            self.timestamp_var.set(encrypted_timestamp())
+        except Exception as exc:
+            self.status(f"Bridge startup failed: {type(exc).__name__}: {exc}")
+            messagebox.showerror("Bridge startup failed", str(exc))
+
+    def _watch_for_reddit_fallback(self) -> None:
+        """
+        Open the Reddit workflow after 15 minutes without a human IRC reply.
+
+        Server notices, topics, numerics, and the bot's own echoed messages
+        do not count as human replies.
+        """
+        deadline = self.irc_fallback_started_at + (15 * 60)
+
+        while time.monotonic() < deadline:
+            if self.irc.last_useful_response > self.irc_fallback_started_at:
+                self.status(
+                    "IRC fallback timer cancelled because a relevant answer was detected."
+                )
+                return
+
+            time.sleep(5)
+
+        if self.irc_fallback_opened:
+            return
+
+        self.irc_fallback_opened = True
+
+        self.status(
+            "IRC: no useful human response was detected after "
+            "15 minutes. Opening the Reddit workflow."
+        )
+
+        self.root.after(
+            0,
+            self._open_reddit_fallback_window,
+        )
+
+    def _open_reddit_fallback_window(self) -> None:
+        helper = Path("/tmp/savingme/reddit_fallback.py")
+
+        if not helper.is_file():
+            self.status(
+                f"Reddit fallback helper is missing: {helper}"
+            )
+            return
+
+        try:
+            subprocess.Popen(
+                [sys.executable, str(helper)],
+                start_new_session=True,
+            )
+        except Exception as exc:
+            self.status(
+                "Could not open the Reddit fallback window: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    def status(self, text: str) -> None:
+        self.root.after(0, self.status_var.set, text)
+        self.root.after(0, lambda: self.output.insert("end", "\n" + text + "\n"))
+        self.root.after(0, self.output.see, "end")
+
+    def copy_token(self) -> None:
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.state.token)
+        self.root.update()
+        self.status("Bridge token copied. Paste it into the extension popup.")
+
+    def copy_timestamp(self) -> None:
+        try:
+            stamp = encrypted_timestamp()
+            self.timestamp_var.set(stamp)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(stamp)
+            self.root.update()
+            self.status("Encrypted timestamp copied.")
+        except Exception as exc:
+            messagebox.showerror("Encrypted timestamp failed", str(exc))
+
+    def on_reddit_observation(self, record: dict) -> None:
+        self.root.after(
+            0,
+            lambda: self.output.insert(
+                "end",
+                "\n\nREDDIT OBSERVATION RECEIVED\n"
+                + json.dumps(record, indent=2, ensure_ascii=False),
+            ),
+        )
+        self.status(
+            f"Received Reddit capture with {len(record.get('comments', []))} visible comments."
+        )
+
+    def on_irc_message(self, nick: str, target: str, message: str) -> None:
+        safe_nick = hashlib.sha256(nick.encode()).hexdigest()[:12]
+        self.root.after(
+            0,
+            lambda: self.output.insert(
+                "end",
+                f"\nIRC {target} user-{safe_nick}: {message}\n",
+            ),
+        )
+        self.root.after(0, self.output.see, "end")
+
+    def on_useful_irc_answer(self, evidence: dict) -> None:
+        self.status(
+            f"Potentially useful IRC evidence received in {evidence.get('channel')}. "
+            "You may analyze it now, open Reddit, or wait 10 minutes."
+        )
+        threading.Thread(target=self._useful_answer_followup, daemon=True).start()
+
+    def _useful_answer_followup(self) -> None:
+        reference = self.irc.last_useful_response
+        remaining = IRC_USEFUL_FOLLOWUP_SECONDS
+        while remaining > 0:
+            if self.irc.last_useful_response > reference:
+                reference = self.irc.last_useful_response
+                remaining = IRC_USEFUL_FOLLOWUP_SECONDS
+            if remaining % 60 == 0:
+                self.status(f"IRC useful-evidence follow-up: {remaining // 60} minute(s) remaining.")
+            time.sleep(1)
+            remaining -= 1
+        self.root.after(0, self._show_next_step_dialog)
+
+    def _show_next_step_dialog(self) -> None:
+        choice = messagebox.askyesnocancel(
+            "IRC evidence collected",
+            "Useful IRC evidence was detected.\n\nYes: analyze with Ollama now.\nNo: open the Reddit workflow.\nCancel: keep collecting IRC evidence.",
+        )
+        if choice is True:
+            self.analyze()
+        elif choice is False:
+            self._open_reddit_fallback_window()
+
+    def request_new_version(self) -> None:
+        report = self.irc.build_debug_report("User requested a new version")
+        DEBUG_REPORT_FILE.write_text(report, encoding="utf-8")
+        self.root.clipboard_clear()
+        self.root.clipboard_append(report)
+        self.root.update()
+        messagebox.showinfo(
+            "Sanitized debug report copied",
+            f"A sanitized report marked {get_sensitive_marker()} was copied to the clipboard and saved to {DEBUG_REPORT_FILE}. It contains no password or intentionally stored personal history.",
+        )
+
+    def _upload_sanitized_request(self, request_path: Path, channel: str) -> None:
+        try:
+            result = git_upload()
+            self.status(f"Sanitized request prepared. GitHub upload status: {result.get('status', 'unknown')}.")
+            if result.get("ok"):
+                self.irc.privmsg(
+                    channel,
+                    "I created a sanitized public response in the project repository. Review it at " + REPO_URL,
+                )
+        except Exception as exc:
+            self.status(f"Sanitized request upload failed: {type(exc).__name__}: {exc}")
+
+    def analyze(self) -> None:
+        threading.Thread(target=self._analyze_worker, daemon=True).start()
+
+    def _analyze_worker(self) -> None:
+        with self.state.lock:
+            records = list(self.state.observations)
+
+        self.status("Running Ollama on Python and Reddit evidence.")
+        try:
+            ollama = run_ollama(records, list(self.irc.messages))
+        except Exception as exc:
+            ollama = {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": f"{type(exc).__name__}: {exc}",
+                "prompt_encrypted_timestamp": "(unavailable)",
+            }
+            self.status(f"Ollama analysis failed: {type(exc).__name__}: {exc}")
+
+        self.status("Uploading source and recording explicit GitHub status.")
+        try:
+            github = git_upload()
+        except Exception as exc:
+            github = {
+                "ok": False,
+                "status": "failed",
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+            self.status(f"GitHub upload failed, but handoff generation will continue: {exc}")
+
+        STATUS_FILE.write_text(json.dumps(github, indent=2))
+        self.handoff = build_handoff(records, ollama, github, list(self.irc.messages))
+        HANDOFF_FILE.write_text(self.handoff)
+        self.root.after(0, lambda: self.output.insert("end", "\n\n" + self.handoff))
+        self.status(
+            f"Analysis complete. GitHub upload status: {github.get('status', 'unknown')}."
+        )
+
+    def upload(self) -> None:
+        threading.Thread(target=self._upload_worker, daemon=True).start()
+
+    def _upload_worker(self) -> None:
+        self.status("Uploading source to GitHub.")
+        try:
+            result = git_upload()
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "status": "failed",
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+        STATUS_FILE.write_text(json.dumps(result, indent=2))
+        self.status(f"GitHub upload status: {result.get('status', 'unknown')}.")
+        self.root.after(
+            0,
+            lambda: self.output.insert(
+                "end", "\n\nGITHUB STATUS\n" + json.dumps(result, indent=2)
+            ),
+        )
+
+    def copy_handoff(self) -> None:
+        if not self.handoff and HANDOFF_FILE.exists():
+            self.handoff = HANDOFF_FILE.read_text()
+        if not self.handoff:
+            messagebox.showinfo(
+                "No final handoff",
+                "Capture a Reddit thread and run Ollama analysis first.",
+            )
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.handoff)
+        self.root.update()
+        self.status("Final handoff copied.")
+
+    def open_extension(self) -> None:
+        extension_path = Path(__file__).resolve().parent / "chrome-extension"
+        run(["xdg-open", str(extension_path)], timeout=20)
+
+    def close(self) -> None:
+        try:
+            DEBUG_REPORT_FILE.write_text(
+                self.irc.build_debug_report("Program closed"),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        self.irc.disconnect()
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
+        self.root.destroy()
+
+
+def main() -> None:
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    SENSITIVE_DIR.mkdir(parents=True, exist_ok=True)
+    COMMAND_FILE.write_text(json.dumps({"command": "continue"}, indent=2))
+    root = tk.Tk()
+    app = App(root)
+    root.protocol("WM_DELETE_WINDOW", app.close)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
