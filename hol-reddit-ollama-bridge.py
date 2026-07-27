@@ -51,13 +51,32 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
 LOCAL_TIMEZONE = ZoneInfo("America/Los_Angeles")
 NIGHTLY_THEME_HOUR = 21
 NIGHTLY_THEME_MINUTE = 30
+RESPONSES_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/responses.json")
+RECORDED_SUMMARIES_FILE = Path.home() / ".recorded-summary.jsonl"
+SUPERVISED_SESSION_SECONDS = 20 * 60
+GENEALOGY_RESEARCH_FACTS = {
+    "subject": "Adaline A. Holderman",
+    "birth": "24 Apr 1835, Marion County, Ohio, USA",
+    "death": "28 Sep 1918, Yuma County, Colorado, USA",
+    "parents": ["Jacob Holderman Sr. (1808-1864)", "Mercy Caroline Loveland (1811-1886)"],
+    "group": "TG356814",
+    "line": [
+        "Jeremiah O'Neal (AKA_TE324543)",
+        "Doug O'Neal (AKA_TE324544)",
+        "Noma Vade Smith",
+        "Archie T. Smith",
+        "Rose Ann Prickett",
+        "Adaline A. Holderman",
+        "Jacob Holderman Sr.",
+    ],
+}
 
 HOST = "127.0.0.1"
 PORT = 2526
@@ -2276,6 +2295,10 @@ class App:
         self.ttk_style = ttk.Style(self.root)
         self.github_upload_lock = threading.Lock()
         self.last_nightly_automation_date = self._load_last_nightly_automation_date()
+        self.supervised_session_deadline = 0.0
+        self.supervised_session_active = False
+        self.safety_pause_active = False
+        self.last_supervised_activity = 0.0
 
         # Overall IRC experiment fallback. This is separate from the
         # shorter per-channel rotation timers.
@@ -2469,6 +2492,59 @@ class App:
             side="left",
             padx=5,
         )
+
+        supervised_frame = tk.LabelFrame(
+            root,
+            text="Supervised Genealogy Research (no automatic posting)",
+            padx=8,
+            pady=8,
+        )
+        supervised_frame.pack(fill="x", padx=12, pady=(8, 2))
+        tk.Button(
+            supervised_frame,
+            text="Start 20-Minute Listening Session",
+            command=self.start_supervised_session,
+            background="#1E88E5",
+            foreground="#FFFFFF",
+            activebackground="#42A5F5",
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(side="left", padx=4)
+        tk.Button(
+            supervised_frame,
+            text="Draft Greeting",
+            command=self.draft_supervised_greeting,
+        ).pack(side="left", padx=4)
+        tk.Button(
+            supervised_frame,
+            text="Draft Genealogy Question",
+            command=self.draft_genealogy_question,
+        ).pack(side="left", padx=4)
+        tk.Button(
+            supervised_frame,
+            text="Generate Reddit Draft",
+            command=self.generate_reddit_draft,
+        ).pack(side="left", padx=4)
+        tk.Button(
+            supervised_frame,
+            text="Record Summary",
+            command=self.open_record_summary_window,
+            background="#6A1B9A",
+            foreground="#FFFFFF",
+        ).pack(side="left", padx=4)
+        tk.Button(
+            supervised_frame,
+            text="View Recorded Summaries",
+            command=self.view_recorded_summaries,
+        ).pack(side="left", padx=4)
+        self.supervised_status_var = tk.StringVar(value="Supervised mode idle. Messages are never sent automatically.")
+        tk.Label(root, textvariable=self.supervised_status_var, anchor="w").pack(fill="x", padx=18, pady=(0,4))
+
+        self.draft_frame = tk.LabelFrame(root, text="Reviewable Draft (copy manually; never auto-sent)", padx=8, pady=8)
+        self.draft_frame.pack(fill="x", padx=12, pady=(4,2))
+        self.supervised_draft = tk.Text(self.draft_frame, height=5, wrap="word")
+        self.supervised_draft.pack(side="left", fill="x", expand=True)
+        tk.Button(self.draft_frame, text="Copy Draft", command=self.copy_supervised_draft).pack(side="left", padx=6)
+        tk.Button(self.draft_frame, text="Clear Draft", command=lambda: self.supervised_draft.delete("1.0", "end")).pack(side="left", padx=2)
 
         tk.Label(
             root,
@@ -3054,6 +3130,7 @@ class App:
 
     def on_irc_message(self, nick: str, target: str, message: str) -> None:
         safe_nick = hashlib.sha256(nick.encode()).hexdigest()[:12]
+        self.last_supervised_activity = time.monotonic()
         self.root.after(
             0,
             lambda: self.output.insert(
@@ -3062,6 +3139,12 @@ class App:
             ),
         )
         self.root.after(0, self.output.see, "end")
+        if self._message_sounds_upset(message):
+            self.safety_pause_active = True
+            self.supervised_session_active = False
+            self.root.after(0, self.supervised_status_var.set, "Safety pause: a participant may be upset. No reply will be drafted; disconnecting in 30 seconds.")
+            self.status("Safety pause triggered by potentially upset or boundary-setting language. No response will be sent.")
+            self.root.after(30_000, self._disconnect_after_safety_pause)
 
     def on_useful_irc_answer(self, evidence: dict) -> None:
         self.status(
@@ -3092,6 +3175,182 @@ class App:
             self.analyze()
         elif choice is False:
             self._open_reddit_fallback_window()
+
+    @staticmethod
+    def _message_sounds_upset(message: str) -> bool:
+        lowered = message.lower()
+        patterns = (
+            "stop", "leave me alone", "do not message", "don't message", "not welcome",
+            "spam", "annoying", "go away", "please leave", "reported", "ban",
+            "uncomfortable", "upset", "angry", "harassing", "harassment",
+        )
+        return any(pattern in lowered for pattern in patterns)
+
+    def _disconnect_after_safety_pause(self) -> None:
+        if not self.safety_pause_active:
+            return
+        try:
+            self.irc.disconnect()
+        finally:
+            self.supervised_status_var.set("Safety pause complete. IRC disconnected; choose any next step manually.")
+
+    def start_supervised_session(self) -> None:
+        self.supervised_session_active = True
+        self.safety_pause_active = False
+        self.supervised_session_deadline = time.monotonic() + SUPERVISED_SESSION_SECONDS
+        self.last_supervised_activity = time.monotonic()
+        self.supervised_status_var.set("20-minute supervised listening session active. No messages will be sent automatically.")
+        self.status("Started a supervised 20-minute IRC listening session. Channel changes and all outgoing messages require manual action.")
+        self.root.after(1_000, self._supervised_session_tick)
+
+    def _supervised_session_tick(self) -> None:
+        if not self.supervised_session_active:
+            return
+        remaining = int(self.supervised_session_deadline - time.monotonic())
+        if remaining <= 0:
+            self.supervised_session_active = False
+            self.supervised_status_var.set("Session complete. A Reddit draft is ready for review.")
+            self.generate_reddit_draft()
+            return
+        mins, secs = divmod(remaining, 60)
+        self.supervised_status_var.set(
+            f"Supervised listening active: {mins:02d}:{secs:02d} remaining. No automatic messages or channel hopping."
+        )
+        self.root.after(1_000, self._supervised_session_tick)
+
+    def _set_supervised_draft(self, text: str) -> None:
+        self.supervised_draft.delete("1.0", "end")
+        self.supervised_draft.insert("1.0", text.strip() + "\n")
+
+    def draft_supervised_greeting(self) -> None:
+        if self.safety_pause_active:
+            messagebox.showwarning("Safety pause", "A participant may be upset. No greeting will be drafted until you reconnect manually.")
+            return
+        self._set_supervised_draft(
+            "Hello. I am doing a supervised genealogy-source research session. "
+            "I will not post automatically, and I will leave if this topic is not appropriate here. "
+            "Would a brief question about nineteenth-century Ohio and Colorado family records be welcome?"
+        )
+        self.status("Drafted a permission-first greeting. Review and copy it manually only if the channel rules allow it.")
+
+    def _load_response_guidance(self) -> list[dict]:
+        try:
+            data = json.loads(RESPONSES_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return [item for item in data if isinstance(item, dict)]
+            if isinstance(data, dict):
+                values = data.get("responses", [])
+                return [item for item in values if isinstance(item, dict)] if isinstance(values, list) else []
+        except FileNotFoundError:
+            return []
+        except Exception as exc:
+            self.status(f"Could not load responses.json: {type(exc).__name__}: {exc}")
+        return []
+
+    def draft_genealogy_question(self) -> None:
+        if self.safety_pause_active:
+            messagebox.showwarning("Safety pause", "No question will be drafted while the safety pause is active.")
+            return
+        guidance = self._load_response_guidance()
+        guidance_note = ""
+        if guidance:
+            guidance_note = f" I also have {len(guidance)} locally reviewed response-guidance item(s), but none will be sent without review."
+        text = (
+            "I am trying to verify the parents and migration trail of Adaline A. Holderman, "
+            "reported born 24 April 1835 in Marion County, Ohio, and died 28 September 1918 "
+            "in Yuma County, Colorado. A working family group, TG356814, identifies Jacob "
+            "Holderman Sr. (1808-1864) and Mercy Caroline Loveland (1811-1886) as her parents. "
+            "Which original or near-original records would be strongest for confirming that parent-child relationship, "
+            "especially Ohio birth/family records, probate, land, cemetery, obituary, or migration evidence?"
+            + guidance_note
+        )
+        self._set_supervised_draft(text)
+        self.status("Drafted a focused genealogy-source question for manual review. It was not sent.")
+
+    def copy_supervised_draft(self) -> None:
+        text = self.supervised_draft.get("1.0", "end").strip()
+        if not text:
+            messagebox.showinfo("No draft", "Create or enter a draft first.")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update()
+        self.status("Reviewable draft copied to the clipboard. Nothing was posted automatically.")
+
+    def _reddit_draft_text(self) -> tuple[str, str, bool]:
+        title = "Which records can verify Adaline Holderman's parents and migration?"
+        body = (
+            "I am researching Adaline A. Holderman, reported born 24 April 1835 in Marion County, Ohio, "
+            "and died 28 September 1918 in Yuma County, Colorado. A working family group labeled TG356814 "
+            "identifies her parents as Jacob Holderman Sr. (1808-1864) and Mercy Caroline Loveland "
+            "(born 8 October 1811 in Delaware, Ohio; died 19 May 1886 in Cottage Grove, Lane County, Oregon).\n\n"
+            "The descendant path I am organizing runs through Rose Ann Prickett, Archie T. Smith, "
+            "Noma Vade Smith, and Doug O'Neal. I am looking for source-based help rather than copied-tree claims.\n\n"
+            "Which original or near-original record sets would be most useful for confirming Adaline's parents "
+            "and tracing the family's movement from Ohio toward Colorado and Oregon? I would especially appreciate "
+            "suggestions for probate, land, church, cemetery, obituary, census, guardianship, or local-history records.\n\n"
+            "I have omitted living-person details and can provide specific citations already checked."
+        )
+        high_quality = len(title) <= 300 and "Which" in title and "original" in body and "living-person" in body
+        return title, body, high_quality
+
+    def generate_reddit_draft(self) -> None:
+        title, body, high_quality = self._reddit_draft_text()
+        text = f"TITLE:\n{title}\n\nBODY:\n{body}"
+        self._set_supervised_draft(text)
+        if high_quality:
+            self.status("Generated a recommended r/Genealogy draft for manual review and posting.")
+        else:
+            self.status("Generated a draft that should be shared with ChatGPT for revision before posting to r/Genealogy.")
+        try:
+            webbrowser.open(f"https://www.reddit.com/r/{DEFAULT_SUBREDDIT}/", new=2)
+        except Exception as exc:
+            self.status(f"Could not open Reddit automatically: {type(exc).__name__}: {exc}")
+
+    def open_record_summary_window(self) -> None:
+        window = tk.Toplevel(self.root)
+        window.title("Record Research Summary")
+        window.geometry("760x520")
+        tk.Label(window, text="Paste or write the ChatGPT-reviewed summary below:").pack(anchor="w", padx=10, pady=(10,4))
+        editor = scrolledtext.ScrolledText(window, wrap="word")
+        editor.pack(fill="both", expand=True, padx=10, pady=5)
+        def save_summary() -> None:
+            text = editor.get("1.0", "end").strip()
+            if not text:
+                messagebox.showinfo("Empty summary", "Enter a summary before saving.", parent=window)
+                return
+            record = {
+                "recorded_at": dt.datetime.now().astimezone().isoformat(),
+                "date": dt.datetime.now().astimezone().date().isoformat(),
+                "summary": text,
+            }
+            with RECORDED_SUMMARIES_FILE.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self.status(f"Recorded summary in {RECORDED_SUMMARIES_FILE}.")
+            window.destroy()
+        tk.Button(window, text="Save Summary", command=save_summary, background="#6A1B9A", foreground="#FFFFFF").pack(pady=8)
+
+    def view_recorded_summaries(self) -> None:
+        window = tk.Toplevel(self.root)
+        window.title("Recorded Genealogy Summaries")
+        window.geometry("820x560")
+        viewer = scrolledtext.ScrolledText(window, wrap="word")
+        viewer.pack(fill="both", expand=True, padx=10, pady=10)
+        try:
+            records = []
+            for line in RECORDED_SUMMARIES_FILE.read_text(encoding="utf-8").splitlines():
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            records.sort(key=lambda item: str(item.get("recorded_at", "")), reverse=True)
+            for item in records:
+                viewer.insert("end", f"DATE: {item.get('recorded_at', 'unknown')}\n{item.get('summary', '')}\n\n{'-'*70}\n\n")
+            if not records:
+                viewer.insert("end", "No recorded summaries yet.")
+        except FileNotFoundError:
+            viewer.insert("end", f"No recorded summaries yet. They will be stored in:\n{RECORDED_SUMMARIES_FILE}")
+        viewer.configure(state="disabled")
 
     def request_new_version(self) -> None:
         try:
