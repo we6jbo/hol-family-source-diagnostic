@@ -51,7 +51,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -84,7 +84,7 @@ DEFAULT_SUBREDDIT = "Genealogy"
 REPO_SLUG = "we6jbo/hol-family-source-diagnostic"
 REPO_URL = f"https://github.com/{REPO_SLUG}"
 MODEL = "llama3.2:3b"
-IRC_LISTEN_ONLY = True
+IRC_AUTOMATED_CHANNEL_MESSAGES_BLOCKED = True
 SHOW_NICKSERV_SECRETS = False
 IRC_USE_TLS = True
 
@@ -892,13 +892,15 @@ class IRCBot:
             raise RuntimeError("IRC is not connected.")
         self.sock.sendall((line + "\r\n").encode("utf-8", errors="replace"))
 
-    def privmsg(self, target: str, message: str) -> bool:
-        if IRC_LISTEN_ONLY:
+    def privmsg(self, target: str, message: str, *, user_approved: bool = False) -> bool:
+        # Automated channel posting remains blocked. A message can be sent only when
+        # the user explicitly submits it through the manual IRC message control.
+        if IRC_AUTOMATED_CHANNEL_MESSAGES_BLOCKED and not user_approved:
             self.app.status(
-                f"IRC listen-only mode: blocked outgoing chat text to {target}."
+                f"IRC blocked an automated outgoing channel message to {target}."
             )
             self.debug_events.append(
-                "LISTEN_ONLY_BLOCK " + target + " " + redact_sensitive_text(message[:200])
+                "AUTOMATED_SEND_BLOCK " + target + " " + redact_sensitive_text(message[:200])
             )
             return False
 
@@ -1462,7 +1464,7 @@ class IRCBot:
         if invite:
             inviter, channel = invite.groups()
             self.app.status(
-                f"IRC listen-only mode: accepting invitation to {channel} from "
+                f"IRC manual-send mode: accepting invitation to {channel} from "
                 f"user-{hashlib.sha256(inviter.encode()).hexdigest()[:12]}."
             )
             self.join_channel(channel)
@@ -1875,9 +1877,9 @@ class IRCBot:
             self.channel_rotation_generation += 1
             generation = self.channel_rotation_generation
 
-        if IRC_LISTEN_ONLY:
+        if IRC_AUTOMATED_CHANNEL_MESSAGES_BLOCKED:
             self.app.status(
-                f"IRC listen-only mode: joined {channel}; outgoing channel messages are muted."
+                f"IRC manual-send mode: joined {channel}; automated channel messages are blocked."
             )
             return
 
@@ -2248,7 +2250,7 @@ def send_manual_irc_message(app, message: str) -> None:
         if wait_left > 0:
             app.status(f"IRC: manual-message cooldown active for {int(wait_left) + 1} more seconds.")
             return
-        if app.irc.privmsg(channel, message):
+        if app.irc.privmsg(channel, message, user_approved=True):
             app.irc.last_manual_message_at = now
             app.status(f"IRC: manually sent to {channel}: {message}")
 
@@ -2445,18 +2447,9 @@ class App:
             padx=5,
         )
 
-        tk.Button(
-            irc_diagnostic_frame,
-            text="Message Sending Muted",
-            command=lambda: self.status("IRC listen-only mode is active; PRIVMSG sending is blocked."),
-        ).pack(
-            side="left",
-            padx=5,
-        )
-
         manual_irc_frame = tk.LabelFrame(
             root,
-            text="IRC Listen-Only Status",
+            text="Send a User-Approved IRC Message",
             padx=8,
             pady=8,
         )
@@ -2466,32 +2459,30 @@ class App:
             pady=(8, 2),
         )
 
+        self.manual_irc_message_var = tk.StringVar()
+        self.manual_irc_message_entry = tk.Entry(
+            manual_irc_frame,
+            textvariable=self.manual_irc_message_var,
+        )
+        self.manual_irc_message_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.manual_irc_message_entry.bind(
+            "<Return>",
+            lambda _event: self.send_manual_channel_message(),
+        )
         tk.Button(
             manual_irc_frame,
-            text="Outgoing Chat Muted",
-            command=lambda: self.status("IRC listen-only mode is active."),
-        ).pack(
-            side="left",
-            padx=5,
-        )
-
-        tk.Button(
-            manual_irc_frame,
-            text="JOIN/PART Still Active",
-            command=lambda: self.status("Channel switching remains active."),
-        ).pack(
-            side="left",
-            padx=5,
-        )
-
-        tk.Button(
-            manual_irc_frame,
-            text="Invites Auto-Join",
-            command=lambda: self.status("IRC invitations are accepted automatically while connected."),
-        ).pack(
-            side="left",
-            padx=5,
-        )
+            text="Send Message to Current Channel",
+            command=self.send_manual_channel_message,
+            background="#16A085",
+            foreground="#FFFFFF",
+            activebackground="#1ABC9C",
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(side="left", padx=5)
+        tk.Label(
+            root,
+            text="Messages are sent only when you press the button or Enter. Background and drafted messages are not sent automatically.",
+            anchor="w",
+        ).pack(fill="x", padx=18, pady=(0, 4))
 
         supervised_frame = tk.LabelFrame(
             root,
@@ -2825,6 +2816,14 @@ class App:
             self.status("WARNING: NickServ passwords and authentication commands will be displayed in this window.")
         else:
             self.status("NickServ passwords are hidden again.")
+
+    def send_manual_channel_message(self) -> None:
+        message = self.manual_irc_message_var.get().strip()
+        if not message:
+            self.status("IRC: type a message before sending.")
+            return
+        send_manual_irc_message(self, message)
+        self.manual_irc_message_var.set("")
 
     def send_nickserv_command(self) -> None:
         """Send one operator-entered command only to NickServ."""
