@@ -23,6 +23,9 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 EOF
+if [ -f "$SRC/setup-pf2f5qtt-private-recovery.sh" ]; then
+    /bin/sh "$SRC/setup-pf2f5qtt-private-recovery.sh" || printf 'Warning: private PF2F5QTT package setup failed.\n' >&2
+fi
 systemctl --user daemon-reload
 systemctl --user enable --now hol-family-source-updater.service
 printf 'Updater enabled and stored persistently in %s\n' "$PERSIST"

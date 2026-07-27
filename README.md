@@ -501,3 +501,10 @@ The `ADA` console command displays the active profile.
 ## Live Pacific clock (version 1.3.5)
 
 The main HOL window displays a live 12-hour clock with seconds, date, and the current Pacific time-zone abbreviation. The clock refreshes every second and remains visible in both the default and Midnight Starry themes. Version 1.3.5 also starts the bridge directly from the complete project directory so companion modules such as `QVIX.py`, `ada.py`, and `hol_reddit_adapter.py` are available.
+
+
+## PF2F5QTT automatic `/tmp` safety
+
+The persistent user updater checks `/tmp` at startup and every five minutes. It never deletes the active project or unrelated temporary files. It may remove only old directories matching `hol-family-source-diagnostic.backup-*`, keeps the newest three, and performs preventive cleanup when more than ten matching backups exist.
+
+Emergency indicators are 95% disk use, 95% inode use, less than 1 GiB free, at least 500,000 counted entries, or at least 2 GiB of HOL backups. A sanitized `PF2F5QTT.md` recovery guide is generated and committed. `setup-pf2f5qtt-private-recovery.sh` creates a private encrypted local-path appendix and `uncensor.sh` under `$HOME/send-to-google-drive`. Keep `uncensor.sh` private because it contains the decryption key by design.

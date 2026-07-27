@@ -27,6 +27,8 @@ publish-to-github.sh
 reinstall-source-tree.sh
 install-extension-to-home.sh
 NEXT-VERSION.md
+PF2F5QTT.md
+setup-pf2f5qtt-private-recovery.sh
 token439873.touch'
 
 command -v git >/dev/null 2>&1 || { echo 'git is required.' >&2; exit 1; }

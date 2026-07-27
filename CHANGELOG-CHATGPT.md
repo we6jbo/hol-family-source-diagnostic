@@ -168,3 +168,8 @@ GUI, GitHub authentication, network posting, Ollama installation, IRC login, and
 - Added a live Pacific clock with date, seconds, AM/PM, and time-zone abbreviation.
 - Clock remains visible in default and Midnight Starry themes.
 - Fixed the bridge launcher to run from the complete project directory rather than `/tmp/datediag`, preserving access to QVIX and accessibility modules.
+
+## 1.3.6
+- Added PF2F5QTT automatic /tmp capacity checks and restricted HOL-backup cleanup.
+- Added sanitized recovery guide Git commit/push behavior.
+- Added private encrypted recovery appendix generator and uncensor script.
