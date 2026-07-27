@@ -51,7 +51,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.6"
+APP_VERSION = "1.3.7"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -2645,7 +2645,7 @@ class App:
         """Display a live 12-hour Pacific clock and refresh it every second."""
         now = dt.datetime.now(tz=LOCAL_TIMEZONE)
         zone = now.tzname() or "Pacific"
-        self.clock_var.set(now.strftime(f"%A, %B %d, %Y   %I:%M:%S %p {zone}"))
+        self.clock_var.set(now.strftime(f"%A, %B %d, %Y   %I:%M:%S %p {zone}") + f"   |   HOL v{APP_VERSION}")
         self.root.after(1_000, self._update_clock)
 
     def _load_theme_name(self) -> str:

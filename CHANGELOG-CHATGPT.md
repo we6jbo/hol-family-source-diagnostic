@@ -1,3 +1,9 @@
+# Version 1.3.7
+
+- Displays the running HOL version immediately beside the live Pacific clock.
+- Keeps the clock updating every second in both the default and Midnight Starry themes.
+- Bumped the Python bridge and Chrome extension manifest consistently to 1.3.7.
+
 # Version 1.3.4
 
 - Added QVIX.py local Unix-socket control adapter.
