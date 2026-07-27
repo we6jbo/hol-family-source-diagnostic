@@ -162,3 +162,9 @@ GUI, GitHub authentication, network posting, Ollama installation, IRC login, and
 - Added a visible manual message field and a colored **Send Message to Current Channel** button.
 - Manual messages are transmitted only after the user presses the button or Enter.
 - Automated channel posting remains blocked; NickServ commands, JOIN, PART, and other IRC protocol controls continue to work.
+
+
+## 1.3.5
+- Added a live Pacific clock with date, seconds, AM/PM, and time-zone abbreviation.
+- Clock remains visible in default and Midnight Starry themes.
+- Fixed the bridge launcher to run from the complete project directory rather than `/tmp/datediag`, preserving access to QVIX and accessibility modules.

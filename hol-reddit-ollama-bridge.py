@@ -51,7 +51,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -2324,6 +2324,18 @@ class App:
 
         theme_frame = tk.Frame(root)
         theme_frame.pack(fill="x", padx=12, pady=(10, 0))
+
+        self.clock_var = tk.StringVar(value="Loading Pacific time...")
+        self.clock_label = tk.Label(
+            theme_frame,
+            textvariable=self.clock_var,
+            font=("TkDefaultFont", 15, "bold"),
+            anchor="w",
+            padx=10,
+            pady=7,
+        )
+        self.clock_label.pack(side="left")
+
         self.theme_button = tk.Button(
             theme_frame,
             text="★ SWITCH TO MIDNIGHT STARRY THEME ★",
@@ -2616,6 +2628,7 @@ class App:
         self.output.pack(fill="both", expand=True, padx=12, pady=12)
         self.output.insert("1.0", CHATGPT_EVIDENCE)
         self.apply_theme(self.theme_name, announce=False)
+        self._update_clock()
         self.root.after(30_000, self._automatic_startup_upload)
         self.root.after(1_000, self._scheduled_automation_tick)
 
@@ -2626,6 +2639,14 @@ class App:
         except Exception as exc:
             self.status(f"Bridge startup failed: {type(exc).__name__}: {exc}")
             messagebox.showerror("Bridge startup failed", str(exc))
+
+
+    def _update_clock(self) -> None:
+        """Display a live 12-hour Pacific clock and refresh it every second."""
+        now = dt.datetime.now(tz=LOCAL_TIMEZONE)
+        zone = now.tzname() or "Pacific"
+        self.clock_var.set(now.strftime(f"%A, %B %d, %Y   %I:%M:%S %p {zone}"))
+        self.root.after(1_000, self._update_clock)
 
     def _load_theme_name(self) -> str:
         try:

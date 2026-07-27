@@ -496,3 +496,8 @@ Example:
 ```
 
 The `ADA` console command displays the active profile.
+
+
+## Live Pacific clock (version 1.3.5)
+
+The main HOL window displays a live 12-hour clock with seconds, date, and the current Pacific time-zone abbreviation. The clock refreshes every second and remains visible in both the default and Midnight Starry themes. Version 1.3.5 also starts the bridge directly from the complete project directory so companion modules such as `QVIX.py`, `ada.py`, and `hol_reddit_adapter.py` are available.
