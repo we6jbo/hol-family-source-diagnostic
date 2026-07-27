@@ -7,6 +7,11 @@ SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 FILES='hol-family-source-diagnostic.py
 hol-family-source-investigator.py
 hol-reddit-ollama-bridge.py
+QVIX.py
+hol_reddit_adapter.py
+communication.py
+ada.py
+install-communication-service.sh
 run-hol-family-source-investigator.sh
 run-reddit-ollama-bridge.sh
 chrome-extension/background.js
@@ -20,6 +25,8 @@ LICENSE
 install.sh
 publish-to-github.sh
 reinstall-source-tree.sh
+install-extension-to-home.sh
+NEXT-VERSION.md
 token439873.touch'
 
 command -v git >/dev/null 2>&1 || { echo 'git is required.' >&2; exit 1; }

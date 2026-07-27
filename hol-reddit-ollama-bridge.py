@@ -51,7 +51,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -92,6 +92,8 @@ IRC_SECRET_MODULE_DIR = "/home/we6jbo/.ircsecrets"
 IRC_PASSWORD_FILE = Path(IRC_SECRET_MODULE_DIR) / "nickserv_password"
 IRC_EMAIL_FILE = Path(IRC_SECRET_MODULE_DIR) / "nickserv_email"
 IRC_NICK = "SirWeSixJBO"
+
+import QVIX
 
 IRC_NETWORKS = {
     "EsperNet": {"server": "irc.esper.net", "port": 6697, "tls": True},
@@ -594,6 +596,11 @@ def git_upload() -> dict:
     # Explicit allowlist: source and support files only. Never add local secret files.
     names = [
         "hol-reddit-ollama-bridge.py",
+        "QVIX.py",
+        "hol_reddit_adapter.py",
+        "communication.py",
+        "ada.py",
+        "install-communication-service.sh",
         "hol-update-watcher.py",
         "hol-family-source-diagnostic.py",
         "hol-family-source-investigator.py",
@@ -1492,6 +1499,8 @@ class IRCBot:
             return
 
         self.last_human_response = time.monotonic()
+        if getattr(self.app, "qvix", None) is not None:
+            self.app.qvix.publish_irc(nick, message, target)
         category = classify_irc_message(message)
         self.app.on_irc_message(nick, target, message)
         self.app.status(f"IRC classification: {category}.")
@@ -2293,6 +2302,7 @@ class App:
         self.server: ThreadingHTTPServer | None = None
         self.handoff = ""
         self.irc = IRCBot(self)
+        self.qvix = None
         self.theme_name = self._load_theme_name()
         self.ttk_style = ttk.Style(self.root)
         self.github_upload_lock = threading.Lock()
@@ -3533,6 +3543,11 @@ class App:
         except Exception:
             pass
         self.irc.disconnect()
+        if getattr(self, "qvix", None) is not None:
+            try:
+                self.qvix.stop()
+            except Exception:
+                pass
         if self.server:
             self.server.shutdown()
             self.server.server_close()
@@ -3640,6 +3655,8 @@ def main() -> None:
     write_version_marker()
     root = tk.Tk()
     app = App(root)
+    app.qvix = QVIX.QVIXBridge(app)
+    app.qvix.start()
     app.status(
         f"HOL bridge version {APP_VERSION} is running. Version marker: "
         f"{VERSION_MARKER_FILE}."

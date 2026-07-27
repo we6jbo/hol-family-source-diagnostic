@@ -389,3 +389,110 @@ The bridge checks local Pacific time using `America/Los_Angeles`. At or after 9:
 ## Version 1.3.1 built-in IRC channel starters
 
 The IRC section now offers up to ten curated starter channels for each configured network. The order favors official help or broad community channels first, followed by research-adjacent and genealogy/history candidates. These are advisory starting points only. IRC channel availability, activity, registration requirements, bot/listener rules, and operator decisions can change. The program does not automatically cycle through channels or use the list to evade bans. Confirm the channel topic and rules before joining.
+
+
+## QVIX local communications and accessibility layer
+
+Version 1.3.4 adds `QVIX.py`, `communication.py`, and `ada.py`.
+
+### Architecture
+
+`QVIX.py` is loaded inside `hol-reddit-ollama-bridge.py`. It publishes incoming
+IRC channel messages in the accessible form `[nickname] message` and accepts
+local commands through the Unix-domain socket:
+
+```text
+/tmp/hol-family-source-diagnostic-qvix.sock
+```
+
+`communication.py` is a telnet-compatible, line-oriented console. The service
+installer keeps a persistent source copy under the user's home directory and
+copies the runtime file to:
+
+```text
+/tmp/communication.py
+```
+
+The console binds only to:
+
+```text
+127.0.0.1:2323
+```
+
+It is deliberately not exposed on Wi-Fi, Ethernet, or the public Internet.
+For another device, use an authenticated SSH tunnel to the T14 and then connect
+to the tunnel's localhost port. Telnet traffic is otherwise unencrypted.
+
+### Install the communication service
+
+Run:
+
+```bash
+cd /tmp/to-github/hol-family-source-diagnostic
+chmod +x install-communication-service.sh
+./install-communication-service.sh
+```
+
+The installer asks for the password without echoing it and stores it at:
+
+```text
+~/.config/hol-family-source-diagnostic/communication_password
+```
+
+with mode `0600`. The password is not embedded in GitHub source files.
+
+Connect locally with:
+
+```bash
+telnet 127.0.0.1 2323
+```
+
+Supported commands:
+
+```text
+STATUS
+READ 30
+SEND your user-approved IRC message
+NETWORKS
+CHANNELS EsperNet
+SERVER EsperNet #linux
+CHANNEL #genealogy
+ADA
+HELP
+QUIT
+```
+
+`SERVER` and `CHANNEL` validate the requested network and channel. `SEND`
+uses the same user-approved message path as the graphical interface. It does
+not enable autonomous posting or raw IRC command injection.
+
+Check the service with:
+
+```bash
+systemctl --user status hol-qvix-communication.service --no-pager -l
+journalctl --user -u hol-qvix-communication.service -n 100 --no-pager
+```
+
+### Accessibility helper
+
+`ada.py` provides practical compatibility options for different terminals,
+screen readers, narrow displays, and reduced-motion environments. It does not
+claim legal ADA certification. Optional settings are read from:
+
+```text
+~/.config/hol-family-source-diagnostic/ada.json
+```
+
+Example:
+
+```json
+{
+  "plain_ascii": false,
+  "wrap_width": 80,
+  "reduced_motion": true,
+  "high_contrast": true,
+  "screen_reader_labels": true
+}
+```
+
+The `ADA` console command displays the active profile.
