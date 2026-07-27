@@ -385,3 +385,7 @@ When clicked, the button creates and copies the sanitized version-request report
 ## Version 1.3.0 nightly theme and automatic source upload
 
 The bridge checks local Pacific time using `America/Los_Angeles`. At or after 9:30 PM, it switches to the persistent Midnight Starry theme. It also runs the existing allowlisted GitHub source upload approximately 30 seconds after startup and once at the nightly theme transition. The nightly run date is stored in `~/.config/hol-family-source-diagnostic/auto-github-upload.json` to prevent repeated uploads during the same evening. Automatic uploads require `git`, authenticated `gh`, and permission to push to the configured repository. Local IRC secrets and bridge tokens are not part of the upload allowlist.
+
+## Version 1.3.1 built-in IRC channel starters
+
+The IRC section now offers up to ten curated starter channels for each configured network. The order favors official help or broad community channels first, followed by research-adjacent and genealogy/history candidates. These are advisory starting points only. IRC channel availability, activity, registration requirements, bot/listener rules, and operator decisions can change. The program does not automatically cycle through channels or use the list to evade bans. Confirm the channel topic and rules before joining.

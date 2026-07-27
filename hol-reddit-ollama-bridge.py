@@ -51,7 +51,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -85,6 +85,122 @@ IRC_NETWORKS = {
     "EFnet": {"server": "irc.efnet.org", "port": 6697, "tls": True},
     "Undernet": {"server": "irc.undernet.org", "port": 6667, "tls": False},
 }
+
+# Curated starter channels shown in the GUI. These are suggestions only.
+# Channel availability, activity, and rules can change at any time. The rank
+# favors broad help/community channels first, then research-adjacent channels.
+# It is not a promise that a user or bot will be permitted to join or speak.
+IRC_BUILTIN_CHANNELS = {
+    "EsperNet": [
+        (1, "#linux", "Active technical help; registration may be required to speak"),
+        (2, "#python", "Programming and research-tool help"),
+        (3, "#help", "Network or client help"),
+        (4, "#lobby", "General network conversation"),
+        (5, "#science", "Research-adjacent discussion"),
+        (6, "#history", "Potential historical-research discussion"),
+        (7, "#books", "Books and source recommendations"),
+        (8, "#research", "Potential general research discussion"),
+        (9, "#genealogy", "Direct topic match; verify that the channel exists and permits listeners"),
+        (10, "##hol-genealogy-listener", "User-controlled informal test channel"),
+    ],
+    "DALnet": [
+        (1, "#Help", "Official recommended help channel"),
+        (2, "#newbies", "General newcomer assistance"),
+        (3, "#IRCHelp", "IRC client and network help"),
+        (4, "#linux", "Technical help for research systems"),
+        (5, "#python", "Programming and data-processing help"),
+        (6, "#science", "Research-adjacent discussion"),
+        (7, "#history", "Potential historical-research discussion"),
+        (8, "#books", "Books and source recommendations"),
+        (9, "#genealogy", "Direct topic match; verify availability and rules"),
+        (10, "#familyhistory", "Direct topic match; verify availability and rules"),
+    ],
+    "Libera.Chat": [
+        (1, "#libera", "Official network help and guidance"),
+        (2, "##linux", "Informal Linux discussion and help"),
+        (3, "#python", "Programming and research-tool help"),
+        (4, "#wikipedia", "Reference and historical-source community"),
+        (5, "#wikimedia", "Open knowledge and archival projects"),
+        (6, "#openstreetmap", "Historical place and location research support"),
+        (7, "#security", "Security and privacy help for research tools"),
+        (8, "##history", "Informal history discussion; verify availability"),
+        (9, "##genealogy", "Informal genealogy topic; verify availability"),
+        (10, "##hol-genealogy-listener", "User-controlled informal test channel"),
+    ],
+    "Snoonet": [
+        (1, "#snoonet", "Official network community; do not connect during an active ban"),
+        (2, "#help", "Network help; do not use to evade a ban"),
+        (3, "#linux", "Technical help"),
+        (4, "#technology", "General technology discussion"),
+        (5, "#science", "Research-adjacent discussion"),
+        (6, "#history", "Potential historical-research discussion"),
+        (7, "#books", "Books and source recommendations"),
+        (8, "#genealogy", "Direct topic match; verify availability and rules"),
+        (9, "#familyhistory", "Direct topic match; verify availability and rules"),
+        (10, "#hol-genealogy-listener", "Private/test candidate; verify availability"),
+    ],
+    "OFTC": [
+        (1, "#oftc", "Official network help and guidance"),
+        (2, "#debian", "Debian technical help"),
+        (3, "#linux", "General Linux help"),
+        (4, "#python", "Programming and research-tool help"),
+        (5, "#wikipedia", "Reference and historical-source community"),
+        (6, "#wikimedia", "Open knowledge and archival projects"),
+        (7, "#openstreetmap", "Historical place and location research support"),
+        (8, "#history", "Potential historical-research discussion"),
+        (9, "#genealogy", "Direct topic match; verify availability and rules"),
+        (10, "#familyhistory", "Direct topic match; verify availability and rules"),
+    ],
+    "Rizon": [
+        (1, "#help", "Network help and guidance"),
+        (2, "#rizon", "General network community"),
+        (3, "#linux", "Technical help"),
+        (4, "#python", "Programming and research-tool help"),
+        (5, "#technology", "General technology discussion"),
+        (6, "#science", "Research-adjacent discussion"),
+        (7, "#history", "Potential historical-research discussion"),
+        (8, "#books", "Books and source recommendations"),
+        (9, "#genealogy", "Direct topic match; verify availability and rules"),
+        (10, "#familyhistory", "Direct topic match; verify availability and rules"),
+    ],
+    "QuakeNet": [
+        (1, "#help", "Network help and guidance"),
+        (2, "#quakenet", "General network community"),
+        (3, "#linux", "Technical help"),
+        (4, "#python", "Programming and research-tool help"),
+        (5, "#programming", "Programming and data-processing discussion"),
+        (6, "#technology", "General technology discussion"),
+        (7, "#science", "Research-adjacent discussion"),
+        (8, "#history", "Potential historical-research discussion"),
+        (9, "#genealogy", "Direct topic match; verify availability and rules"),
+        (10, "#familyhistory", "Direct topic match; verify availability and rules"),
+    ],
+    "EFnet": [
+        (1, "#efnet", "General network community and guidance"),
+        (2, "#help", "Network or client help"),
+        (3, "#linux", "Technical help"),
+        (4, "#unix", "Unix technical discussion"),
+        (5, "#python", "Programming and research-tool help"),
+        (6, "#programming", "Programming and data-processing discussion"),
+        (7, "#science", "Research-adjacent discussion"),
+        (8, "#history", "Potential historical-research discussion"),
+        (9, "#genealogy", "Direct topic match; verify availability and rules"),
+        (10, "#familyhistory", "Direct topic match; verify availability and rules"),
+    ],
+    "Undernet": [
+        (1, "#help", "Network help and guidance"),
+        (2, "#cservice", "Channel-service assistance"),
+        (3, "#beginner", "General newcomer assistance"),
+        (4, "#linux", "Technical help"),
+        (5, "#python", "Programming and research-tool help"),
+        (6, "#computer", "General computer discussion"),
+        (7, "#science", "Research-adjacent discussion"),
+        (8, "#history", "Potential historical-research discussion"),
+        (9, "#genealogy", "Direct topic match; verify availability and rules"),
+        (10, "#familyhistory", "Direct topic match; verify availability and rules"),
+    ],
+}
+
 IRC_NETWORK_NAME = "EsperNet"
 IRC_SERVER = IRC_NETWORKS[IRC_NETWORK_NAME]["server"]
 IRC_PORT = IRC_NETWORKS[IRC_NETWORK_NAME]["port"]
@@ -2208,10 +2324,19 @@ class App:
             width=18,
         )
         self.irc_network_combo.pack(side="left", padx=5)
+        self.irc_network_combo.bind("<<ComboboxSelected>>", self.on_irc_network_selected)
 
-        tk.Label(irc_network_frame, text="Channel (optional):").pack(side="left", padx=(12, 0))
+        tk.Label(irc_network_frame, text="Built-in channel (up to 10):").pack(side="left", padx=(12, 0))
         self.irc_channel_var = tk.StringVar(value="")
-        tk.Entry(irc_network_frame, textvariable=self.irc_channel_var, width=30).pack(side="left", padx=5)
+        self.irc_channel_combo = ttk.Combobox(
+            irc_network_frame,
+            textvariable=self.irc_channel_var,
+            values=(),
+            state="normal",
+            width=26,
+        )
+        self.irc_channel_combo.pack(side="left", padx=5)
+        self.irc_channel_combo.bind("<<ComboboxSelected>>", self.on_builtin_channel_selected)
         tk.Button(
             irc_network_frame,
             text="Connect Selected Network",
@@ -2236,6 +2361,17 @@ class App:
             text="Check for Newer Running Version",
             command=self.manual_newer_version_check,
         ).pack(side="left", padx=5)
+
+        self.irc_channel_details_var = tk.StringVar(value="")
+        self.irc_channel_details_label = tk.Label(
+            root,
+            textvariable=self.irc_channel_details_var,
+            anchor="w",
+            justify="left",
+            wraplength=1180,
+        )
+        self.irc_channel_details_label.pack(fill="x", padx=18, pady=(0, 4))
+        self.refresh_builtin_channels()
 
         nickserv_command_frame = tk.LabelFrame(
             root,
@@ -2651,6 +2787,37 @@ class App:
             self.status(
                 "IRC: NickServ command failed: "
                 f"{type(exc).__name__}: {exc}"
+            )
+
+    def refresh_builtin_channels(self) -> None:
+        network = self.irc_network_var.get() or IRC_NETWORK_NAME
+        entries = IRC_BUILTIN_CHANNELS.get(network, [])[:10]
+        labels = [f"{rank}. {channel}" for rank, channel, _note in entries]
+        self._builtin_channel_map = {label: (channel, note, rank) for label, (rank, channel, note) in zip(labels, entries)}
+        self.irc_channel_combo.configure(values=labels)
+        if labels:
+            self.irc_channel_combo.set(labels[0])
+            self.on_builtin_channel_selected()
+        else:
+            self.irc_channel_combo.set("")
+            self.irc_channel_details_var.set("No built-in starter channels are configured for this network.")
+
+    def on_irc_network_selected(self, _event=None) -> None:
+        self.refresh_builtin_channels()
+
+    def on_builtin_channel_selected(self, _event=None) -> None:
+        selected = self.irc_channel_var.get().strip()
+        mapped = getattr(self, "_builtin_channel_map", {}).get(selected)
+        if mapped:
+            channel, note, rank = mapped
+            self.irc_channel_var.set(channel)
+            self.irc_channel_details_var.set(
+                f"Suitability rank {rank}/10: {note}. "
+                "Ranking is advisory, not a guarantee against bans. Read the topic and rules before joining."
+            )
+        elif selected:
+            self.irc_channel_details_var.set(
+                "Custom channel. Verify that it exists and that its operators permit this listener before joining."
             )
 
     def connect_selected_irc(self) -> None:
