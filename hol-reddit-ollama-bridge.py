@@ -21,6 +21,7 @@ import json
 import os
 import base64
 import re
+from collections import deque
 import random
 import secrets
 import shutil
@@ -31,11 +32,14 @@ import sys
 import threading
 import traceback
 import time
+import datetime as dt
+import webbrowser
 import tkinter as tk
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext, simpledialog, ttk
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 APP_DIR = Path("/tmp/datediag")
 SENSITIVE_DIR = Path("/tmp/sensitiveinf22")
@@ -45,30 +49,51 @@ OBSERVATIONS_FILE = SENSITIVE_DIR / "reddit-observations.jsonl"
 HANDOFF_FILE = APP_DIR / "reddit-ollama-chatgpt-handoff.txt"
 STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
+VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
+CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
+APP_VERSION = "1.3.0"
+REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
+THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
+AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
+LOCAL_TIMEZONE = ZoneInfo("America/Los_Angeles")
+NIGHTLY_THEME_HOUR = 21
+NIGHTLY_THEME_MINUTE = 30
 
 HOST = "127.0.0.1"
 PORT = 2526
-DEFAULT_SUBREDDIT = "LocalLLaMA"
+DEFAULT_SUBREDDIT = "Genealogy"
 REPO_SLUG = "we6jbo/hol-family-source-diagnostic"
 REPO_URL = f"https://github.com/{REPO_SLUG}"
 MODEL = "llama3.2:3b"
+IRC_LISTEN_ONLY = True
+SHOW_NICKSERV_SECRETS = False
+IRC_USE_TLS = True
 
 IRC_SECRET_MODULE_DIR = "/home/we6jbo/.ircsecrets"
-IRC_SERVER = "irc.snoonet.org"
-IRC_PORT = 6697
+IRC_PASSWORD_FILE = Path(IRC_SECRET_MODULE_DIR) / "nickserv_password"
+IRC_EMAIL_FILE = Path(IRC_SECRET_MODULE_DIR) / "nickserv_email"
 IRC_NICK = "SirWeSixJBO"
+
+IRC_NETWORKS = {
+    "EsperNet": {"server": "irc.esper.net", "port": 6697, "tls": True},
+    "DALnet": {"server": "irc.dal.net", "port": 6697, "tls": True},
+    "Libera.Chat": {"server": "irc.libera.chat", "port": 6697, "tls": True},
+    "Snoonet": {"server": "irc.snoonet.org", "port": 6697, "tls": True},
+    "OFTC": {"server": "irc.oftc.net", "port": 6697, "tls": True},
+    "Rizon": {"server": "irc.rizon.net", "port": 6697, "tls": True},
+    "QuakeNet": {"server": "irc.quakenet.org", "port": 6667, "tls": False},
+    "EFnet": {"server": "irc.efnet.org", "port": 6697, "tls": True},
+    "Undernet": {"server": "irc.undernet.org", "port": 6667, "tls": False},
+}
+IRC_NETWORK_NAME = "EsperNet"
+IRC_SERVER = IRC_NETWORKS[IRC_NETWORK_NAME]["server"]
+IRC_PORT = IRC_NETWORKS[IRC_NETWORK_NAME]["port"]
+IRC_USE_TLS = bool(IRC_NETWORKS[IRC_NETWORK_NAME].get("tls", True))
 
 # Channels the bot may rotate through when nobody responds.
 # Add only channels where bots and this type of question are permitted.
 IRC_CHANNEL_ROTATION = (
-    "#snoonet",             # Official Network Portal | High
-    "#help",                # Network Assistance | High
-    "#chat",                # General Chat | High
-    "#talk",                # General Discussion | Medium
-    "#reddit",              # Reddit Community Hub | Medium
-    "#casualconversation",  # Friendly Social Chat | Medium
-    "#games",               # Gaming Discussion | Medium
-    "#anime",               # Media & Animation | Medium
+    "##hol-genealogy-listener",  # User-controlled informal test channel.
 )
 
 IRC_NO_RESPONSE_SECONDS = 120
@@ -93,15 +118,9 @@ IRC_REALNAME = (
     "SirWeSixJBO, an automated Python bot written by ChatGPT for Jeremiah O'Neal; "
     "source available after channel permission"
 )
-IRC_START_CHANNEL = "#snoonet"
+IRC_START_CHANNEL = ""
 IRC_FALLBACK_CANDIDATES = [
-    "###bot-testing",
-    "##matrix-irc",
-    "##services",
-    "##python",
-    "##git",
-    "##reddit",
-    "##news",
+    "##hol-genealogy-listener",
 ]
 IRC_WAIT_SECONDS = 600
 IRC_LOG_FILE = SENSITIVE_DIR / "irc-observations.jsonl"
@@ -270,6 +289,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json(503, {"ok": False, "error": str(exc)})
             return
+        if path == "/ollama-test":
+            result = run_ollama_test()
+            self._json(200 if result.get("ok") else 503, result)
+            return
         if path == "/status":
             self._json(200, {
                 "ok": True,
@@ -311,6 +334,35 @@ def start_server(state: BridgeState) -> ThreadingHTTPServer:
     state.server = server
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+def run_ollama_test() -> dict:
+    """Send one harmless prompt and confirm that the configured Ollama model replies."""
+    if not shutil.which("ollama"):
+        return {"ok": False, "returncode": 127, "response": "", "error": "ollama is not installed"}
+    result = run(
+        ["ollama", "run", MODEL],
+        timeout=120,
+        input_text="Reply with exactly: HOL OLLAMA TEST OK\n",
+    )
+    response = sanitize_ansi(result.get("stdout", "")).strip()
+    error = sanitize_ansi(result.get("stderr", "")).strip()
+    hint = ""
+    if "llama-server binary not found" in error.lower():
+        hint = (
+            "The Ollama command exists, but its companion runtime files are missing. "
+            "Repair the Ollama installation from the official Linux package, restart "
+            "the Ollama service, and test again. A normal Ollama installation should "
+            "not require you to compile llama.cpp manually."
+        )
+    return {
+        "ok": result.get("returncode") == 0 and bool(response),
+        "returncode": result.get("returncode", 1),
+        "response": response[:2000],
+        "error": error[:2000],
+        "hint": hint,
+        "model": MODEL,
+    }
 
 
 def python_observation(records: list[dict]) -> str:
@@ -404,10 +456,25 @@ def git_upload() -> dict:
         repo_dir = temp
 
     source_root = Path(__file__).resolve().parent
+    # Explicit allowlist: source and support files only. Never add local secret files.
     names = [
         "hol-reddit-ollama-bridge.py",
+        "hol-update-watcher.py",
+        "hol-family-source-diagnostic.py",
+        "hol-family-source-investigator.py",
         "run-reddit-ollama-bridge.sh",
+        "run-hol-family-source-investigator.sh",
+        "install-auto-updater.sh",
+        "install-extension-to-home.sh",
+        "install.sh",
+        "restore-from-github.sh",
+        "github-recovery-test.sh",
+        "publish-to-github.sh",
+        "reinstall-source-tree.sh",
         "README.md",
+        "NEXT-VERSION.md",
+        "CHANGELOG-CHATGPT.md",
+        "378876.txt",
         "LICENSE",
         ".gitignore",
     ]
@@ -440,7 +507,12 @@ def git_upload() -> dict:
             shutil.rmtree(dst_ext, ignore_errors=True)
             shutil.copytree(src_ext, dst_ext)
 
-    run(["git", "-C", str(repo_dir), "add", "--"] + names + ["chrome-extension", "irc-public-requests"])
+    add_paths = [name for name in names if (repo_dir / name).exists()]
+    if (repo_dir / "chrome-extension").exists():
+        add_paths.append("chrome-extension")
+    if (repo_dir / "irc-public-requests").exists():
+        add_paths.append("irc-public-requests")
+    run(["git", "-C", str(repo_dir), "add", "--"] + add_paths)
     diff = run(["git", "-C", str(repo_dir), "diff", "--cached", "--quiet"])
     commit = None
     if diff["returncode"] == 1:
@@ -449,9 +521,16 @@ def git_upload() -> dict:
             f"Add encrypted Reddit Ollama bridge | encrypted-time={stamp}",
         ])
     push = run(["git", "-C", str(repo_dir), "push", "origin", "main"], timeout=180)
+    if push["returncode"] != 0:
+        status = "failed"
+    elif commit is None:
+        status = "up-to-date"
+    else:
+        status = "committed-and-pushed"
     return {
         "ok": push["returncode"] == 0,
-        "status": "succeeded" if push["returncode"] == 0 else "failed",
+        "status": status,
+        "changed": commit is not None,
         "commit": commit,
         "push": push,
         "encrypted_timestamp": stamp,
@@ -585,35 +664,33 @@ def classify_irc_message(message: str) -> str:
 
 
 def get_nickserv_password() -> str:
-    """
-    Retrieve the NickServ password through the local access module.
-
-    This function does not print, log, save, or modify the password.
-    """
+    """Return the local NickServ password without printing or logging it."""
+    # Prefer the user's read-only helper module when present.
     if IRC_SECRET_MODULE_DIR not in sys.path:
         sys.path.insert(0, IRC_SECRET_MODULE_DIR)
-
     try:
         from access_password import get_irc_password
-    except Exception as exc:
-        raise RuntimeError(
-            "Could not import the IRC password access module from "
-            f"{IRC_SECRET_MODULE_DIR}: {type(exc).__name__}: {exc}"
-        ) from exc
+    except Exception:
+        get_irc_password = None
 
-    try:
-        password = get_irc_password()
-    except Exception as exc:
-        raise RuntimeError(
-            f"Could not retrieve the IRC password: {type(exc).__name__}: {exc}"
-        ) from exc
+    if get_irc_password is not None:
+        try:
+            password = get_irc_password()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not retrieve the IRC password: {type(exc).__name__}: {exc}"
+            ) from exc
+    else:
+        if not IRC_PASSWORD_FILE.exists():
+            raise FileNotFoundError(
+                f"IRC password file does not exist: {IRC_PASSWORD_FILE}"
+            )
+        password = IRC_PASSWORD_FILE.read_text(encoding="utf-8").rstrip("\n")
 
     if not isinstance(password, str) or not password:
-        raise RuntimeError("The IRC access module returned an empty password.")
-
+        raise RuntimeError("The IRC password is empty.")
     if "\n" in password or "\r" in password:
         raise RuntimeError("The IRC password contains a line break.")
-
     return password
 
 
@@ -662,6 +739,10 @@ class IRCBot:
         # Account, recommendation, evidence, and safety state.
         self.account_identified = False
         self.nickserv_warning = False
+        self.nickserv_registration_attempted = False
+        self.nickserv_registration_followup_seen = False
+        self.nickserv_registration_generation = 0
+        self.recent_raw_lines: deque[str] = deque(maxlen=80)
         self.last_useful_response = 0.0
         self.useful_answers: list[dict] = []
         self.previous_channel: str | None = None
@@ -677,6 +758,15 @@ class IRCBot:
         self.sock.sendall((line + "\r\n").encode("utf-8", errors="replace"))
 
     def privmsg(self, target: str, message: str) -> bool:
+        if IRC_LISTEN_ONLY:
+            self.app.status(
+                f"IRC listen-only mode: blocked outgoing chat text to {target}."
+            )
+            self.debug_events.append(
+                "LISTEN_ONLY_BLOCK " + target + " " + redact_sensitive_text(message[:200])
+            )
+            return False
+
         reasons = outgoing_risk_reasons(message)
         if reasons:
             self.app.status(
@@ -696,6 +786,20 @@ class IRCBot:
                 self.send_raw(f"PRIVMSG {target} :{piece[:400]}")
                 sent = True
         return sent
+
+    def send_sensitive_service_command(self, service: str, command: str) -> None:
+        """Send a service command and optionally display its exact contents."""
+        if not self.sock:
+            raise RuntimeError("IRC is not connected.")
+        display = f"PRIVMSG {service} :{command}"
+        if SHOW_NICKSERV_SECRETS:
+            self.app.status("IRC SENT -> " + display)
+        else:
+            safe = re.sub(r"(?i)(IDENTIFY(?:\s+\S+)?|REGISTER)\s+\S+", r"\1 [PASSWORD HIDDEN]", display)
+            self.app.status("IRC SENT -> " + safe)
+        payload = (display + "\r\n").encode("utf-8")
+        self.sock.sendall(payload)
+        payload = None
 
     def connect(self) -> None:
         if self.running:
@@ -831,7 +935,8 @@ class IRCBot:
 
     def _connect_once(self) -> None:
         self.app.status(
-            f"IRC: connecting to {IRC_SERVER}:{IRC_PORT} with TLS."
+            f"IRC: connecting to {IRC_SERVER}:{IRC_PORT} "
+            + ("with TLS." if IRC_USE_TLS else "without TLS.")
         )
 
         raw = socket.create_connection(
@@ -839,11 +944,14 @@ class IRCBot:
             timeout=30,
         )
 
-        context = ssl.create_default_context()
-        self.sock = context.wrap_socket(
-            raw,
-            server_hostname=IRC_SERVER,
-        )
+        if IRC_USE_TLS:
+            context = ssl.create_default_context()
+            self.sock = context.wrap_socket(
+                raw,
+                server_hostname=IRC_SERVER,
+            )
+        else:
+            self.sock = raw
 
         # The connection timeout is only for establishing the connection.
         # Once connected, allow the IRC read loop to wait indefinitely.
@@ -856,22 +964,8 @@ class IRCBot:
             newline="\n",
         )
 
-        password = get_nickserv_password()
-
-        # Snoonet supports authenticating during registration through the
-        # IRC server-password field using "account:password".
-        #
-        # Send PASS directly to the TLS socket so authentication material
-        # cannot be displayed by send_raw(), status output, or future logging.
-        pass_command = (
-            f"PASS {IRC_NICK}:{password}\r\n"
-        ).encode("utf-8")
-
-        self.sock.sendall(pass_command)
-
-        password = None
-        pass_command = None
-
+        # Do not use IRC PASS for NickServ authentication. Network account
+        # services are handled after registration and never logged.
         self.send_raw(f"NICK {IRC_NICK}")
         self.send_raw(f"USER {IRC_NICK} 0 * :{IRC_REALNAME}")
 
@@ -917,6 +1011,16 @@ class IRCBot:
                         reconnect_delay = min(reconnect_delay * 2, 60)
                         continue
 
+                    message = str(exc)
+                    lowered = message.lower()
+                    if "z-lined" in lowered or "network ban" in lowered or "you are banned" in lowered:
+                        self.app.status(
+                            "IRC access is blocked by a server/network ban. "
+                            "Automatic reconnecting has stopped. Do not reconnect until the stated ban expires."
+                        )
+                        self.debug_events.append("IRC_BAN_STOP " + redact_sensitive_text(message[:500]))
+                        break
+
                     self.app.status(
                         "IRC unexpected failure: "
                         f"{type(exc).__name__}: {exc}"
@@ -932,6 +1036,11 @@ class IRCBot:
             self.running = False
 
     def _handle_line(self, line: str) -> None:
+        self.recent_raw_lines.append(line)
+        if "NickServ" in line or " NICKSERV " in line.upper():
+            self.app.status("IRC RECEIVED <- " + line)
+            if self.nickserv_registration_attempted:
+                self.nickserv_registration_followup_seen = True
         if line.startswith("PING "):
             self.send_raw("PONG " + line[5:])
             return
@@ -1014,6 +1123,7 @@ class IRCBot:
         if len(parts) >= 2 and parts[1] == "900":
             self.account_identified = True
             self.nickserv_warning = False
+            self.nickserv_registration_attempted = False
             self.app.status(
                 f"IRC account login confirmed as {IRC_NICK}."
             )
@@ -1042,10 +1152,22 @@ class IRCBot:
 
         if len(parts) >= 2 and parts[1] == "001":
             self.app.status(
-                f"IRC registration completed as {IRC_NICK}. "
-                "Account identification will be tracked separately."
+                f"IRC registration completed as {IRC_NICK} on {IRC_NETWORK_NAME}."
             )
-            self.join_channel(IRC_START_CHANNEL)
+            try:
+                password = get_nickserv_password()
+                self.send_sensitive_service_command(
+                    "NickServ", f"IDENTIFY {IRC_NICK} {password}"
+                )
+                password = None
+                self.app.status("IRC: NickServ identification requested securely.")
+            except Exception as exc:
+                self.app.status(
+                    "IRC: connected without NickServ identification: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            if IRC_START_CHANNEL:
+                self.join_channel(IRC_START_CHANNEL)
             return
 
         # Join the starting channel only after NickServ confirms that this
@@ -1076,6 +1198,7 @@ class IRCBot:
             "invalid password",
             "authentication failed",
             "is not registered",
+            "is not a registered nickname",
         )
 
         if (
@@ -1093,9 +1216,20 @@ class IRCBot:
                 "NICKSERV_WARNING " + redact_sensitive_text(line)
             )
             self.app.status(
-                "IRC NickServ warning recorded. The bot will continue, but "
-                "registered-only channels may reject it."
+                "IRC NickServ reports that this nickname is not registered."
             )
+            if (
+                "is not registered" in line.lower()
+                or "is not a registered nickname" in line.lower()
+            ):
+                if self.nickserv_registration_attempted:
+                    self.app.status(
+                        "IRC: automatic NickServ registration was already attempted "
+                        "during this connection; it will not be repeated."
+                    )
+                else:
+                    self.nickserv_registration_attempted = True
+                    self.app.root.after(0, self.app.auto_register_nickserv)
             return
 
         # Topic, membership, channel restriction, and send diagnostics.
@@ -1188,6 +1322,16 @@ class IRCBot:
                     "IRC diagnostic: a ban mask (+b) was added. "
                     "It may or may not match this account."
                 )
+
+        invite = re.match(r"^:([^!]+)![^ ]+ INVITE [^ ]+ :(#{1,3}[A-Za-z0-9_+\-]+)$", line)
+        if invite:
+            inviter, channel = invite.groups()
+            self.app.status(
+                f"IRC listen-only mode: accepting invitation to {channel} from "
+                f"user-{hashlib.sha256(inviter.encode()).hexdigest()[:12]}."
+            )
+            self.join_channel(channel)
+            return
 
         match = re.match(r"^:([^!]+)![^ ]+ PRIVMSG ([^ ]+) :(.*)$", line)
         if not match:
@@ -1577,6 +1721,12 @@ class IRCBot:
             self.delivery_test_running = False
 
     def join_channel(self, channel: str) -> None:
+        channel = channel.strip()
+        if not channel:
+            self.app.status("IRC: enter a channel name before joining.")
+            return
+        if not channel.startswith("#"):
+            channel = "#" + channel
         self.channel = channel
         self.permission_to_participate = False
         self.permission_to_share_github = False
@@ -1589,6 +1739,12 @@ class IRCBot:
         with self.channel_rotation_lock:
             self.channel_rotation_generation += 1
             generation = self.channel_rotation_generation
+
+        if IRC_LISTEN_ONLY:
+            self.app.status(
+                f"IRC listen-only mode: joined {channel}; outgoing channel messages are muted."
+            )
+            return
 
         threading.Thread(
             target=self._announce_after_join,
@@ -2000,6 +2156,10 @@ class App:
         self.server: ThreadingHTTPServer | None = None
         self.handoff = ""
         self.irc = IRCBot(self)
+        self.theme_name = self._load_theme_name()
+        self.ttk_style = ttk.Style(self.root)
+        self.github_upload_lock = threading.Lock()
+        self.last_nightly_automation_date = self._load_last_nightly_automation_date()
 
         # Overall IRC experiment fallback. This is separate from the
         # shorter per-channel rotation timers.
@@ -2011,9 +2171,103 @@ class App:
             daemon=True,
         ).start()
 
+        theme_frame = tk.Frame(root)
+        theme_frame.pack(fill="x", padx=12, pady=(10, 0))
+        self.theme_button = tk.Button(
+            theme_frame,
+            text="★ SWITCH TO MIDNIGHT STARRY THEME ★",
+            command=self.toggle_theme,
+            background="#7A1FA2",
+            foreground="#FFF4A3",
+            activebackground="#9C27B0",
+            activeforeground="#FFFFFF",
+            font=("TkDefaultFont", 11, "bold"),
+            relief="raised",
+            borderwidth=4,
+            padx=16,
+            pady=7,
+            cursor="hand2",
+        )
+        self.theme_button.pack(side="right")
+
+        irc_network_frame = tk.LabelFrame(
+            root,
+            text="IRC Network Selection",
+            padx=8,
+            pady=8,
+        )
+        irc_network_frame.pack(fill="x", padx=12, pady=(8, 2))
+
+        tk.Label(irc_network_frame, text="Network:").pack(side="left")
+        self.irc_network_var = tk.StringVar(value=IRC_NETWORK_NAME)
+        self.irc_network_combo = ttk.Combobox(
+            irc_network_frame,
+            textvariable=self.irc_network_var,
+            values=list(IRC_NETWORKS.keys()),
+            state="readonly",
+            width=18,
+        )
+        self.irc_network_combo.pack(side="left", padx=5)
+
+        tk.Label(irc_network_frame, text="Channel (optional):").pack(side="left", padx=(12, 0))
+        self.irc_channel_var = tk.StringVar(value="")
+        tk.Entry(irc_network_frame, textvariable=self.irc_channel_var, width=30).pack(side="left", padx=5)
+        tk.Button(
+            irc_network_frame,
+            text="Connect Selected Network",
+            command=self.connect_selected_irc,
+        ).pack(side="left", padx=5)
+        tk.Button(
+            irc_network_frame,
+            text="Join Channel",
+            command=self.join_selected_channel,
+        ).pack(side="left", padx=5)
+
+        self.show_nickserv_secrets_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            irc_network_frame,
+            text="Show NickServ password/commands",
+            variable=self.show_nickserv_secrets_var,
+            command=self.update_nickserv_visibility,
+        ).pack(side="left", padx=8)
+
+        tk.Button(
+            irc_network_frame,
+            text="Check for Newer Running Version",
+            command=self.manual_newer_version_check,
+        ).pack(side="left", padx=5)
+
+        nickserv_command_frame = tk.LabelFrame(
+            root,
+            text="NickServ Command",
+            padx=8,
+            pady=8,
+        )
+        nickserv_command_frame.pack(fill="x", padx=12, pady=(8, 2))
+        tk.Label(
+            nickserv_command_frame,
+            text="Enter /msg NickServ ... or only the NickServ command:",
+        ).pack(side="left")
+        self.nickserv_command_var = tk.StringVar(value="")
+        self.nickserv_command_entry = tk.Entry(
+            nickserv_command_frame,
+            textvariable=self.nickserv_command_var,
+            width=58,
+        )
+        self.nickserv_command_entry.pack(side="left", padx=6, fill="x", expand=True)
+        self.nickserv_command_entry.bind(
+            "<Return>",
+            lambda _event: self.send_nickserv_command(),
+        )
+        tk.Button(
+            nickserv_command_frame,
+            text="Send to NickServ",
+            command=self.send_nickserv_command,
+        ).pack(side="left", padx=5)
+
         irc_diagnostic_frame = tk.LabelFrame(
             root,
-            text="IRC Diagnostics",
+            text="IRC Listener Controls",
             padx=8,
             pady=8,
         )
@@ -2034,8 +2288,8 @@ class App:
 
         tk.Button(
             irc_diagnostic_frame,
-            text="Test Message Delivery",
-            command=self.irc.start_delivery_diagnostic,
+            text="Message Sending Muted",
+            command=lambda: self.status("IRC listen-only mode is active; PRIVMSG sending is blocked."),
         ).pack(
             side="left",
             padx=5,
@@ -2043,7 +2297,7 @@ class App:
 
         manual_irc_frame = tk.LabelFrame(
             root,
-            text="Manual IRC Messages",
+            text="IRC Listen-Only Status",
             padx=8,
             pady=8,
         )
@@ -2055,11 +2309,8 @@ class App:
 
         tk.Button(
             manual_irc_frame,
-            text="Why so quiet?",
-            command=lambda: send_manual_irc_message(
-                self,
-                "Why is the channel so quiet?",
-            ),
+            text="Outgoing Chat Muted",
+            command=lambda: self.status("IRC listen-only mode is active."),
         ).pack(
             side="left",
             padx=5,
@@ -2067,11 +2318,8 @@ class App:
 
         tk.Button(
             manual_irc_frame,
-            text="Why no response?",
-            command=lambda: send_manual_irc_message(
-                self,
-                "So, why isn't anyone responding to me?",
-            ),
+            text="JOIN/PART Still Active",
+            command=lambda: self.status("Channel switching remains active."),
         ).pack(
             side="left",
             padx=5,
@@ -2079,8 +2327,8 @@ class App:
 
         tk.Button(
             manual_irc_frame,
-            text="Send Random Message",
-            command=lambda: send_random_irc_message(self),
+            text="Invites Auto-Join",
+            command=lambda: self.status("IRC invitations are accepted automatically while connected."),
         ).pack(
             side="left",
             padx=5,
@@ -2122,14 +2370,31 @@ class App:
 
         buttons = tk.Frame(root)
         buttons.pack(fill="x", padx=12, pady=10)
-        tk.Button(buttons, text="Run Ollama on Reddit Evidence", command=self.analyze).pack(side="left")
+        tk.Button(buttons, text="Test Ollama Response", command=self.test_ollama).pack(side="left")
         tk.Button(buttons, text="Upload Source to GitHub", command=self.upload).pack(side="left", padx=8)
         tk.Button(buttons, text="Copy Final Handoff", command=self.copy_handoff).pack(side="left")
         tk.Button(buttons, text="Open Extension Folder", command=self.open_extension).pack(side="left", padx=8)
-        tk.Button(buttons, text="Connect IRC Bot", command=self.irc.connect).pack(side="left", padx=8)
+        tk.Button(buttons, text="IRC Network Help", command=lambda: self.status("Choose a network above, then click Connect Selected Network.")).pack(side="left", padx=8)
         tk.Button(buttons, text="Disconnect IRC", command=self.irc.disconnect).pack(side="left")
-        tk.Button(buttons, text="Request New Version", command=self.request_new_version).pack(side="left", padx=8)
+        self.request_version_button = tk.Button(
+            buttons,
+            text="REQUEST NEW VERSION",
+            command=self.request_new_version,
+            background="#FFD400",
+            foreground="#003366",
+            activebackground="#FFEA70",
+            activeforeground="#003366",
+            font=("TkDefaultFont", 10, "bold"),
+            relief="raised",
+            borderwidth=4,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+        )
+        self.request_version_button.pack(side="left", padx=10)
         tk.Button(buttons, text="Open Reddit Workflow", command=self._open_reddit_fallback_window).pack(side="left")
+        tk.Button(buttons, text="Check GitHub Sync", command=self.check_github_sync).pack(side="left", padx=8)
+        tk.Button(buttons, text="Test GitHub Recovery", command=self.test_github_recovery).pack(side="left")
 
         self.status_var = tk.StringVar(value="Starting localhost bridge...")
         tk.Label(root, textvariable=self.status_var, anchor="w").pack(fill="x", padx=12)
@@ -2137,6 +2402,9 @@ class App:
         self.output = scrolledtext.ScrolledText(root, wrap="word")
         self.output.pack(fill="both", expand=True, padx=12, pady=12)
         self.output.insert("1.0", CHATGPT_EVIDENCE)
+        self.apply_theme(self.theme_name, announce=False)
+        self.root.after(30_000, self._automatic_startup_upload)
+        self.root.after(1_000, self._scheduled_automation_tick)
 
         try:
             self.server = start_server(self.state)
@@ -2145,6 +2413,366 @@ class App:
         except Exception as exc:
             self.status(f"Bridge startup failed: {type(exc).__name__}: {exc}")
             messagebox.showerror("Bridge startup failed", str(exc))
+
+    def _load_theme_name(self) -> str:
+        try:
+            value = THEME_FILE.read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            return "default"
+        return "midnight" if value == "midnight" else "default"
+
+    def _save_theme_name(self) -> None:
+        THEME_FILE.parent.mkdir(parents=True, exist_ok=True)
+        THEME_FILE.write_text(self.theme_name + "\n", encoding="utf-8")
+
+    def toggle_theme(self) -> None:
+        next_theme = "default" if self.theme_name == "midnight" else "midnight"
+        self.apply_theme(next_theme, announce=True)
+
+    def apply_theme(self, theme_name: str, announce: bool = True) -> None:
+        self.theme_name = "midnight" if theme_name == "midnight" else "default"
+        if self.theme_name == "midnight":
+            palette = {
+                "root": "#071426",
+                "panel": "#10213A",
+                "entry": "#09182B",
+                "text": "#E7F2FF",
+                "muted": "#B8D4F0",
+                "accent": "#5536A8",
+                "accent_active": "#7658CC",
+                "button_text": "#FFF3A6",
+                "select": "#2D5B9A",
+            }
+            self.theme_button.configure(
+                text="☀ RETURN TO DEFAULT THEME ☀",
+                background="#5B2C83", foreground="#FFF3A6",
+                activebackground="#7B3FB0", activeforeground="#FFFFFF",
+            )
+        else:
+            palette = {
+                "root": "#F0F0F0",
+                "panel": "#F0F0F0",
+                "entry": "#FFFFFF",
+                "text": "#000000",
+                "muted": "#202020",
+                "accent": "#E8E8E8",
+                "accent_active": "#D6D6D6",
+                "button_text": "#000000",
+                "select": "#4A6984",
+            }
+            self.theme_button.configure(
+                text="★ SWITCH TO MIDNIGHT STARRY THEME ★",
+                background="#7A1FA2", foreground="#FFF4A3",
+                activebackground="#9C27B0", activeforeground="#FFFFFF",
+            )
+
+        self.root.configure(background=palette["root"])
+        self.ttk_style.configure(
+            "HOL.TCombobox",
+            fieldbackground=palette["entry"],
+            background=palette["accent"],
+            foreground=palette["text"],
+            arrowcolor=palette["text"],
+        )
+        self.ttk_style.map(
+            "HOL.TCombobox",
+            fieldbackground=[("readonly", palette["entry"])],
+            foreground=[("readonly", palette["text"])],
+            selectbackground=[("readonly", palette["select"])],
+            selectforeground=[("readonly", "#FFFFFF")],
+        )
+        self.irc_network_combo.configure(style="HOL.TCombobox")
+
+        def recolor(widget: tk.Misc) -> None:
+            for child in widget.winfo_children():
+                recolor(child)
+            if widget is self.theme_button or widget is self.request_version_button:
+                return
+            if isinstance(widget, (tk.Frame, tk.LabelFrame)):
+                widget.configure(background=palette["panel"])
+                if isinstance(widget, tk.LabelFrame):
+                    widget.configure(foreground=palette["text"])
+            elif isinstance(widget, tk.Label):
+                widget.configure(background=palette["panel"], foreground=palette["text"])
+            elif isinstance(widget, tk.Button):
+                widget.configure(
+                    background=palette["accent"], foreground=palette["button_text"],
+                    activebackground=palette["accent_active"], activeforeground="#FFFFFF",
+                )
+            elif isinstance(widget, tk.Checkbutton):
+                widget.configure(
+                    background=palette["panel"], foreground=palette["text"],
+                    activebackground=palette["panel"], activeforeground=palette["text"],
+                    selectcolor=palette["entry"],
+                )
+            elif isinstance(widget, tk.Entry):
+                try:
+                    state = str(widget.cget("state"))
+                    if state == "readonly":
+                        widget.configure(
+                            readonlybackground=palette["entry"],
+                            foreground=palette["text"],
+                        )
+                    else:
+                        widget.configure(
+                            background=palette["entry"], foreground=palette["text"],
+                            insertbackground=palette["text"],
+                            selectbackground=palette["select"], selectforeground="#FFFFFF",
+                        )
+                except tk.TclError:
+                    pass
+            elif isinstance(widget, tk.Text):
+                widget.configure(
+                    background=palette["entry"], foreground=palette["text"],
+                    insertbackground=palette["text"],
+                    selectbackground=palette["select"], selectforeground="#FFFFFF",
+                )
+
+        recolor(self.root)
+        # Keep the new-version action visually distinctive in both themes.
+        self.request_version_button.configure(
+            background="#FFD400", foreground="#003366",
+            activebackground="#FFEA70", activeforeground="#003366",
+        )
+        self._save_theme_name()
+        if announce:
+            label = "Midnight Starry" if self.theme_name == "midnight" else "Default"
+            self.status(f"Theme changed to {label}. The choice will be restored next time.")
+
+    def _load_last_nightly_automation_date(self) -> str:
+        try:
+            data = json.loads(AUTO_UPLOAD_STATE_FILE.read_text(encoding="utf-8"))
+            return str(data.get("last_nightly_date", "")) if isinstance(data, dict) else ""
+        except Exception:
+            return ""
+
+    def _save_nightly_automation_date(self, date_text: str) -> None:
+        AUTO_UPLOAD_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "last_nightly_date": date_text,
+            "saved_at": dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat(),
+            "version": APP_VERSION,
+        }
+        temporary = AUTO_UPLOAD_STATE_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, AUTO_UPLOAD_STATE_FILE)
+        self.last_nightly_automation_date = date_text
+
+    def _automatic_startup_upload(self) -> None:
+        self.status("Automatic GitHub source upload is starting after program startup.")
+        threading.Thread(
+            target=self._automatic_upload_worker,
+            args=("startup",),
+            daemon=True,
+        ).start()
+
+    def _scheduled_automation_tick(self) -> None:
+        now = dt.datetime.now(tz=LOCAL_TIMEZONE)
+        today = now.date().isoformat()
+        after_nightly_time = (now.hour, now.minute) >= (NIGHTLY_THEME_HOUR, NIGHTLY_THEME_MINUTE)
+        if after_nightly_time and self.last_nightly_automation_date != today:
+            if self.theme_name != "midnight":
+                self.apply_theme("midnight", announce=False)
+                self.status("It is at or after 9:30 PM Pacific. Midnight Starry theme activated automatically.")
+            self._save_nightly_automation_date(today)
+            threading.Thread(
+                target=self._automatic_upload_worker,
+                args=("nightly-9:30-PM-Pacific",),
+                daemon=True,
+            ).start()
+        self.root.after(30_000, self._scheduled_automation_tick)
+
+    def _automatic_upload_worker(self, reason: str) -> None:
+        if not self.github_upload_lock.acquire(blocking=False):
+            self.status(f"Automatic GitHub upload skipped ({reason}): another upload is already running.")
+            return
+        try:
+            self.status(f"Automatic GitHub source upload started ({reason}).")
+            result = git_upload()
+            STATUS_FILE.write_text(json.dumps(result, indent=2), encoding="utf-8")
+            self.status(
+                f"Automatic GitHub upload finished ({reason}): "
+                f"{result.get('status', 'unknown')}."
+            )
+            self.root.after(
+                0,
+                lambda: self.output.insert(
+                    "end",
+                    "\n\nAUTOMATIC GITHUB STATUS " + reason + "\n" + json.dumps(result, indent=2),
+                ),
+            )
+        except Exception as exc:
+            self.status(f"Automatic GitHub upload failed ({reason}): {type(exc).__name__}: {exc}")
+        finally:
+            self.github_upload_lock.release()
+
+    def update_nickserv_visibility(self) -> None:
+        global SHOW_NICKSERV_SECRETS
+        SHOW_NICKSERV_SECRETS = bool(self.show_nickserv_secrets_var.get())
+        if SHOW_NICKSERV_SECRETS:
+            self.status("WARNING: NickServ passwords and authentication commands will be displayed in this window.")
+        else:
+            self.status("NickServ passwords are hidden again.")
+
+    def send_nickserv_command(self) -> None:
+        """Send one operator-entered command only to NickServ."""
+        if not self.irc.running or not self.irc.sock:
+            self.status("IRC: connect to a network before sending a NickServ command.")
+            return
+
+        entered = self.nickserv_command_var.get().strip()
+        if not entered:
+            self.status("IRC: enter a NickServ command first.")
+            return
+
+        command = entered
+        match = re.match(r"(?i)^/msg\s+([^\s]+)\s+(.+)$", entered)
+        if match:
+            service = match.group(1)
+            command = match.group(2).strip()
+            if service.lower() != "nickserv":
+                self.status("IRC: this control can send commands only to NickServ.")
+                return
+        elif entered.startswith("/"):
+            self.status(
+                "IRC: use /msg NickServ COMMAND, or enter only the NickServ command."
+            )
+            return
+
+        if "\r" in command or "\n" in command or not command:
+            self.status("IRC: invalid NickServ command.")
+            return
+
+        try:
+            self.irc.send_sensitive_service_command("NickServ", command)
+            self.status("IRC: operator-entered NickServ command sent.")
+            self.nickserv_command_var.set("")
+        except Exception as exc:
+            self.status(
+                "IRC: NickServ command failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    def connect_selected_irc(self) -> None:
+        global IRC_NETWORK_NAME, IRC_SERVER, IRC_PORT, IRC_START_CHANNEL, IRC_USE_TLS
+        if self.irc.running:
+            self.status("IRC is already connected. Disconnect before changing networks.")
+            return
+        name = self.irc_network_var.get()
+        config = IRC_NETWORKS.get(name)
+        if not config:
+            self.status("IRC: select a valid network.")
+            return
+        IRC_NETWORK_NAME = name
+        IRC_SERVER = str(config["server"])
+        IRC_PORT = int(config["port"])
+        IRC_USE_TLS = bool(config.get("tls", True))
+        IRC_START_CHANNEL = self.irc_channel_var.get().strip()
+        self.irc.channel = IRC_START_CHANNEL
+        self.status(
+            f"IRC: selected {IRC_NETWORK_NAME} at {IRC_SERVER}:{IRC_PORT}. "
+            "This does not bypass or evade any network ban."
+        )
+        self.irc.connect()
+
+    def join_selected_channel(self) -> None:
+        if not self.irc.running:
+            self.status("IRC: connect to the selected network first.")
+            return
+        self.irc.join_channel(self.irc_channel_var.get())
+
+    def auto_register_nickserv(self) -> None:
+        """Register an unregistered nickname once using protected local files."""
+        if not self.irc.running:
+            self.status("IRC: cannot register because the connection is closed.")
+            return
+
+        email = ""
+        if IRC_EMAIL_FILE.exists():
+            email = IRC_EMAIL_FILE.read_text(encoding="utf-8").strip()
+        if not email or any(ch in email for ch in " \r\n") or "@" not in email:
+            self.status(
+                "IRC: automatic registration could not run because "
+                f"{IRC_EMAIL_FILE} does not contain a valid email address."
+            )
+            return
+
+        try:
+            password = get_nickserv_password()
+            self.irc.send_sensitive_service_command(
+                "NickServ", f"REGISTER {password} {email}"
+            )
+            password = None
+            self.irc.nickserv_registration_followup_seen = False
+            self.irc.nickserv_registration_generation += 1
+            generation = self.irc.nickserv_registration_generation
+            self.status(
+                f"IRC: automatic NickServ registration sent for {IRC_NICK} "
+                f"on {IRC_NETWORK_NAME}. Check {email} for the VERIFY REGISTER command."
+            )
+            self.root.after(15000, lambda: self.report_registration_timeout(generation))
+        except Exception as exc:
+            self.status(
+                "IRC: automatic NickServ registration failed locally: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    def report_registration_timeout(self, generation: int) -> None:
+        """Print recent IRC lines when registration receives no follow-up."""
+        if generation != self.irc.nickserv_registration_generation:
+            return
+        if self.irc.nickserv_registration_followup_seen:
+            return
+        recent = list(self.irc.recent_raw_lines)[-10:]
+        self.status(
+            "IRC: no NickServ follow-up was detected within 15 seconds after "
+            "REGISTER. The last IRC lines are printed below for diagnosis."
+        )
+        if not recent:
+            self.status("IRC DIAGNOSTIC: no recent server lines were captured.")
+            return
+        block = "\nIRC REGISTRATION TIMEOUT DIAGNOSTIC\n" + "\n".join(recent) + "\n"
+        self.root.after(0, lambda: self.output.insert("end", block))
+        self.root.after(0, self.output.see, "end")
+
+    def offer_nickserv_registration(self) -> None:
+        if not self.irc.running:
+            return
+        if not messagebox.askyesno(
+            "Register IRC nickname?",
+            f"{IRC_NETWORK_NAME} reports that {IRC_NICK} is not registered. "
+            "Register it using the local password file? Password display follows the Show NickServ password/commands checkbox.",
+        ):
+            self.status("IRC: nickname registration was not requested.")
+            return
+
+        email = ""
+        if IRC_EMAIL_FILE.exists():
+            email = IRC_EMAIL_FILE.read_text(encoding="utf-8").strip()
+        if not email:
+            email = simpledialog.askstring(
+                "NickServ registration email",
+                "Enter the email address required by NickServ. It will be sent to the selected IRC network but not saved by this program.",
+                parent=self.root,
+            ) or ""
+        email = email.strip()
+        if not email or any(ch in email for ch in " \r\n") or "@" not in email:
+            self.status("IRC: registration cancelled because no valid email address was supplied.")
+            return
+        try:
+            password = get_nickserv_password()
+            self.irc.send_sensitive_service_command(
+                "NickServ", f"REGISTER {password} {email}"
+            )
+            password = None
+            self.status(
+                "IRC: NickServ registration command sent securely. Check the network's notices and verification email."
+            )
+        except Exception as exc:
+            self.status(
+                "IRC: NickServ registration failed locally: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
     def _watch_for_reddit_fallback(self) -> None:
         """
@@ -2180,24 +2808,47 @@ class App:
         )
 
     def _open_reddit_fallback_window(self) -> None:
-        helper = Path("/tmp/savingme/reddit_fallback.py")
-
-        if not helper.is_file():
-            self.status(
-                f"Reddit fallback helper is missing: {helper}"
-            )
-            return
-
+        # The old build depended on an unrelated temporary helper under
+        # /tmp/savingme. Open the configured genealogy community directly so
+        # the workflow survives reboots and cleanups of /tmp.
+        url = f"https://www.reddit.com/r/{DEFAULT_SUBREDDIT}/"
         try:
-            subprocess.Popen(
-                [sys.executable, str(helper)],
-                start_new_session=True,
-            )
+            opened = webbrowser.open(url, new=2)
+            if opened:
+                self.status(f"Opened r/{DEFAULT_SUBREDDIT} in the default browser.")
+            else:
+                self.status(f"Could not automatically open {url}. Open it manually.")
         except Exception as exc:
             self.status(
-                "Could not open the Reddit fallback window: "
+                "Could not open the Reddit workflow: "
                 f"{type(exc).__name__}: {exc}"
             )
+
+
+    def check_github_sync(self) -> None:
+        project = Path("/tmp/to-github/hol-family-source-diagnostic")
+        if not (project / ".git").exists():
+            self.status("GitHub warning: the current project is not a Git working tree.")
+            return
+        dirty = run(["git", "-C", str(project), "status", "--porcelain"], timeout=30)
+        run(["git", "-C", str(project), "fetch", "origin"], timeout=60)
+        ahead = run(["git", "-C", str(project), "rev-list", "--count", "@{u}..HEAD"], timeout=30)
+        behind = run(["git", "-C", str(project), "rev-list", "--count", "HEAD..@{u}"], timeout=30)
+        d = bool(dirty.get("stdout"))
+        a = ahead.get("stdout", "?")
+        b = behind.get("stdout", "?")
+        if d or a not in {"0", ""}:
+            self.status(f"GitHub warning: current version is not fully saved remotely. dirty={d}, ahead={a}, behind={b}.")
+        else:
+            self.status(f"GitHub sync check: no local uncommitted/unpushed changes. behind={b}.")
+
+    def test_github_recovery(self) -> None:
+        script = Path("/tmp/to-github/hol-family-source-diagnostic/github-recovery-test.sh")
+        if not script.exists():
+            self.status("GitHub recovery test script is missing.")
+            return
+        result = run([str(script)], timeout=180)
+        self.status((result.get("stdout") or result.get("stderr") or "GitHub recovery test finished.")[:2000])
 
     def status(self, text: str) -> None:
         self.root.after(0, self.status_var.set, text)
@@ -2276,15 +2927,50 @@ class App:
             self._open_reddit_fallback_window()
 
     def request_new_version(self) -> None:
-        report = self.irc.build_debug_report("User requested a new version")
-        DEBUG_REPORT_FILE.write_text(report, encoding="utf-8")
-        self.root.clipboard_clear()
-        self.root.clipboard_append(report)
-        self.root.update()
-        messagebox.showinfo(
-            "Sanitized debug report copied",
-            f"A sanitized report marked {get_sensitive_marker()} was copied to the clipboard and saved to {DEBUG_REPORT_FILE}. It contains no password or intentionally stored personal history.",
-        )
+        try:
+            report = self.irc.build_debug_report("User requested a new version")
+            DEBUG_REPORT_FILE.write_text(report, encoding="utf-8")
+            self.root.clipboard_clear()
+            self.root.clipboard_append(report)
+            self.root.update()
+
+            raw_lines = REQUEST_NEW_VERSION_URL_FILE.read_text(encoding="utf-8").splitlines()
+            url = next(
+                (line.strip() for line in raw_lines if line.strip() and not line.lstrip().startswith("#")),
+                "",
+            )
+            parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError(
+                    f"{REQUEST_NEW_VERSION_URL_FILE} must contain one complete http:// or https:// URL."
+                )
+
+            opened = webbrowser.open(url, new=2)
+            self.status(
+                f"New-version request report copied and URL opened from {REQUEST_NEW_VERSION_URL_FILE}."
+                if opened
+                else f"Report copied, but the browser did not confirm opening {url}."
+            )
+            messagebox.showinfo(
+                "New-version request ready",
+                f"A sanitized report marked {get_sensitive_marker()} was copied to the clipboard and saved to {DEBUG_REPORT_FILE}.\n\n"
+                f"The configured request URL was opened from:\n{REQUEST_NEW_VERSION_URL_FILE}\n\n"
+                "Paste the copied report into that page to request the next version.",
+            )
+        except FileNotFoundError:
+            messagebox.showerror(
+                "New-version URL file missing",
+                "Create this file first:\n\n"
+                f"{REQUEST_NEW_VERSION_URL_FILE}\n\n"
+                "Put one complete http:// or https:// URL on the first nonblank, non-comment line.",
+            )
+            self.status(f"Request New Version failed: missing {REQUEST_NEW_VERSION_URL_FILE}.")
+        except Exception as exc:
+            self.status(f"Request New Version failed: {type(exc).__name__}: {exc}")
+            messagebox.showerror(
+                "Request New Version failed",
+                f"{type(exc).__name__}: {exc}\n\nURL file:\n{REQUEST_NEW_VERSION_URL_FILE}",
+            )
 
     def _upload_sanitized_request(self, request_path: Path, channel: str) -> None:
         try:
@@ -2297,6 +2983,23 @@ class App:
                 )
         except Exception as exc:
             self.status(f"Sanitized request upload failed: {type(exc).__name__}: {exc}")
+
+    def test_ollama(self) -> None:
+        threading.Thread(target=self._test_ollama_worker, daemon=True).start()
+
+    def _test_ollama_worker(self) -> None:
+        self.status(f"Testing Ollama model {MODEL} with one harmless prompt.")
+        result = run_ollama_test()
+        self.root.after(
+            0,
+            lambda: self.output.insert(
+                "end", "\n\nOLLAMA TEST\n" + json.dumps(result, indent=2)
+            ),
+        )
+        self.status(
+            "Ollama responded successfully." if result.get("ok")
+            else "Ollama test failed: " + str(result.get("error") or "no response")
+        )
 
     def analyze(self) -> None:
         threading.Thread(target=self._analyze_worker, daemon=True).start()
@@ -2340,23 +3043,29 @@ class App:
         threading.Thread(target=self._upload_worker, daemon=True).start()
 
     def _upload_worker(self) -> None:
+        if not self.github_upload_lock.acquire(blocking=False):
+            self.status("GitHub upload skipped because another upload is already running.")
+            return
         self.status("Uploading source to GitHub.")
         try:
-            result = git_upload()
-        except Exception as exc:
-            result = {
-                "ok": False,
-                "status": "failed",
-                "reason": f"{type(exc).__name__}: {exc}",
-            }
-        STATUS_FILE.write_text(json.dumps(result, indent=2))
-        self.status(f"GitHub upload status: {result.get('status', 'unknown')}.")
-        self.root.after(
-            0,
-            lambda: self.output.insert(
-                "end", "\n\nGITHUB STATUS\n" + json.dumps(result, indent=2)
-            ),
-        )
+            try:
+                result = git_upload()
+            except Exception as exc:
+                result = {
+                    "ok": False,
+                    "status": "failed",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+            STATUS_FILE.write_text(json.dumps(result, indent=2), encoding="utf-8")
+            self.status(f"GitHub upload status: {result.get('status', 'unknown')}.")
+            self.root.after(
+                0,
+                lambda: self.output.insert(
+                    "end", "\n\nGITHUB STATUS\n" + json.dumps(result, indent=2)
+                ),
+            )
+        finally:
+            self.github_upload_lock.release()
 
     def copy_handoff(self) -> None:
         if not self.handoff and HANDOFF_FILE.exists():
@@ -2376,6 +3085,20 @@ class App:
         extension_path = Path(__file__).resolve().parent / "chrome-extension"
         run(["xdg-open", str(extension_path)], timeout=20)
 
+    def manual_newer_version_check(self) -> None:
+        result = detect_newer_version()
+        if result:
+            source, newer_version, newer_pid = result
+            details = f" from PID {newer_pid}" if newer_pid else " installed on disk"
+            self.status(
+                f"Version {APP_VERSION} detected newer version {newer_version}{details}; closing this older copy."
+            )
+            self.root.after(300, self.close)
+            return
+        self.status(
+            f"No newer version was detected. This running bridge is version {APP_VERSION}."
+        )
+
     def close(self) -> None:
         try:
             DEBUG_REPORT_FILE.write_text(
@@ -2388,15 +3111,115 @@ class App:
         if self.server:
             self.server.shutdown()
             self.server.server_close()
+        try:
+            marker = read_version_marker()
+            if int(marker.get("pid", 0)) == os.getpid():
+                VERSION_MARKER_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
         self.root.destroy()
+
+
+def version_tuple(value: str) -> tuple[int, ...]:
+    parts = re.findall(r"\d+", value)
+    return tuple(int(part) for part in parts[:4]) or (0,)
+
+
+def read_version_marker() -> dict:
+    try:
+        data = json.loads(VERSION_MARKER_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def marker_process_is_running(marker: dict) -> bool:
+    try:
+        pid = int(marker.get("pid", 0))
+        if pid <= 0:
+            return False
+        os.kill(pid, 0)
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        return "hol-reddit-ollama-bridge.py" in cmdline
+    except Exception:
+        return False
+
+
+def write_version_marker() -> None:
+    payload = {
+        "version": APP_VERSION,
+        "pid": os.getpid(),
+        "started": time.time(),
+        "program": str(Path(__file__).resolve()),
+    }
+    temp = VERSION_MARKER_FILE.with_suffix(".tmp")
+    temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(temp, VERSION_MARKER_FILE)
+
+
+def installed_manifest_version() -> str:
+    try:
+        data = json.loads(CANONICAL_MANIFEST_FILE.read_text(encoding="utf-8"))
+        return str(data.get("version", "0")) if isinstance(data, dict) else "0"
+    except Exception:
+        return "0"
+
+
+def detect_newer_version() -> tuple[str, str, int | None] | None:
+    marker = read_version_marker()
+    marker_version = str(marker.get("version", "0"))
+    try:
+        marker_pid = int(marker.get("pid", 0))
+    except Exception:
+        marker_pid = 0
+    if (
+        marker_pid != os.getpid()
+        and marker_process_is_running(marker)
+        and version_tuple(marker_version) > version_tuple(APP_VERSION)
+    ):
+        return ("running marker", marker_version, marker_pid)
+
+    disk_version = installed_manifest_version()
+    if version_tuple(disk_version) > version_tuple(APP_VERSION):
+        return ("installed manifest", disk_version, None)
+    return None
+
+
+def newest_version_guard(root: tk.Tk, app: App) -> None:
+    result = detect_newer_version()
+    if result:
+        source, newer_version, newer_pid = result
+        if newer_pid:
+            detail = f"newer version {newer_version} is running as PID {newer_pid}"
+        else:
+            detail = f"newer version {newer_version} is installed at {CANONICAL_MANIFEST_FILE}"
+        app.status(f"Version {APP_VERSION} is closing because {detail}.")
+        root.after(300, app.close)
+        return
+    root.after(2000, lambda: newest_version_guard(root, app))
 
 
 def main() -> None:
     APP_DIR.mkdir(parents=True, exist_ok=True)
     SENSITIVE_DIR.mkdir(parents=True, exist_ok=True)
     COMMAND_FILE.write_text(json.dumps({"command": "continue"}, indent=2))
+    existing = read_version_marker()
+    existing_version = str(existing.get("version", "0"))
+    if marker_process_is_running(existing) and version_tuple(existing_version) > version_tuple(APP_VERSION):
+        print(
+            f"HOL bridge {APP_VERSION} will not start because newer version "
+            f"{existing_version} is recorded in {VERSION_MARKER_FILE}.",
+            file=sys.stderr,
+        )
+        return
+    write_version_marker()
     root = tk.Tk()
     app = App(root)
+    app.status(
+        f"HOL bridge version {APP_VERSION} is running. Version marker: "
+        f"{VERSION_MARKER_FILE}."
+    )
+    newest_version_guard(root, app)
     root.protocol("WM_DELETE_WINDOW", app.close)
     root.mainloop()
 

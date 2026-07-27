@@ -232,7 +232,7 @@ If encrypted timestamp generation fails, public output is blocked.
 The companion Manifest V3 extension captures only text visible in a Reddit tab
 the user deliberately opens. It does not auto-post, vote, log in, crawl Reddit
 in the background, or claim authorized Reddit API access. The default editable
-subreddit label is `r/LocalLLaMA`.
+subreddit label is `r/Genealogy`.
 
 ### Start the bridge
 
@@ -309,3 +309,79 @@ A successful publication includes `token439873.touch` in the repository root. Th
 The application does not publish automatically at startup. Publishing requires the explicit GitHub button or `./publish-to-github.sh`. The publishing helper stages only its documented allowlist, checks the remote branch before pushing, and never force-pushes.
 
 The investigator never executes a freshly downloaded installer with `sudo`. If Ollama is missing, it may download the official installer into `/tmp/sensitiveinf22` for manual inspection and report its SHA-256 digest, but it stops until Ollama is installed separately.
+
+
+## Version 1.1.0 test workflow
+
+The IRC client now runs in strict listen-only mode. It can authenticate, join, part, switch channels, respond to IRC protocol traffic, and accept channel invitations, but all outgoing `PRIVMSG` chat text is blocked in one central method.
+
+Copy the unpacked extension to a stable directory in your home folder:
+
+```bash
+./install-extension-to-home.sh
+```
+
+This creates:
+
+```text
+~/hol-family-source-diagnostic-extension
+```
+
+Load that exact directory from `chrome://extensions` using Developer mode and **Load unpacked**. The popup opens `r/Genealogy`, explains that the user must click Reddit's Join button, tests Ollama with one harmless prompt, and captures only the Reddit page deliberately opened in the active tab.
+
+The genealogy details supplied for the test contain an impossible date conflict: Adaline Holderman cannot have been born on April 24, 1935 and died on September 28, 1918. Confirm whether the birth year was 1835, the death year was later than 1935, or whether two people were combined before posting. The place name `Marion County, oio` should also be reviewed and likely normalized to `Marion County, Ohio, USA`.
+
+
+## IRC default in version 1.1.2
+
+The bridge now connects to `irc.libera.chat:6697` using TLS and starts in
+`##hol-genealogy-listener`, an informal channel controlled by the user. It does
+not automatically roam through unrelated public channels. Keep listen-only mode
+enabled. Before joining another public channel, obtain permission from that
+channel's operators for an automated client and for any recording or logging.
+
+## IRC network selector and NickServ registration
+
+Version 1.1.3 provides a manual IRC network selector. The bridge never automatically cycles through networks to evade restrictions. Disconnect before changing networks, select one network, optionally enter a channel, and connect. Outgoing channel chat remains muted.
+
+The NickServ password remains outside the repository. The bridge first tries the user's read-only helper module:
+
+```text
+/home/we6jbo/.ircsecrets/access_password.py
+```
+
+and otherwise reads:
+
+```text
+/home/we6jbo/.ircsecrets/nickserv_password
+```
+
+When a network reports that the nickname is unregistered, the GUI asks for explicit confirmation before sending `REGISTER`. Most networks require an email address. The bridge can read it from `/home/we6jbo/.ircsecrets/nickserv_email` or ask for it without saving it.
+
+## Automatic version updates and reboot recovery
+Run `./install-auto-updater.sh` once. The user systemd service watches `~/Downloads` for a newer file named `hol-family-source-diagnostic-vX.Y.Z.zip`. It validates ZIP paths, checks the manifest version, compiles the Python bridge, warns in its log about uncommitted or unpushed Git changes, backs up the old `/tmp` tree, installs the extension, stops the old bridge, and starts the new bridge.
+
+Logs: `~/.local/state/hol-family-source-diagnostic/updater.log` and `bridge.log`.
+On reboot, if the `/tmp` working tree is gone, the service clones the GitHub repository and resumes from that version. Use `./github-recovery-test.sh` to test a clean clone without replacing the running version. Use `./restore-from-github.sh` for a manual restore.
+
+
+## Request New Version button (1.2.6)
+
+The bright yellow **REQUEST NEW VERSION** button reads its destination URL from:
+
+```text
+~/.config/hol-family-source-diagnostic/new-version-url.txt
+```
+
+The file format is plain UTF-8 text. Put one complete `https://` or `http://` URL on the first nonblank, non-comment line. Lines beginning with `#` are comments. Example:
+
+```text
+# Page used to request the next HOL Family Source Diagnostic version
+https://chatgpt.com/
+```
+
+When clicked, the button creates and copies the sanitized version-request report, saves the report to the existing debug-report path, validates the configured URL, and opens it in the default browser.
+
+## Version 1.3.0 nightly theme and automatic source upload
+
+The bridge checks local Pacific time using `America/Los_Angeles`. At or after 9:30 PM, it switches to the persistent Midnight Starry theme. It also runs the existing allowlisted GitHub source upload approximately 30 seconds after startup and once at the nightly theme transition. The nightly run date is stored in `~/.config/hol-family-source-diagnostic/auto-github-upload.json` to prevent repeated uploads during the same evening. Automatic uploads require `git`, authenticated `gh`, and permission to push to the configured repository. Local IRC secrets and bridge tokens are not part of the upload allowlist.

@@ -2,25 +2,36 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>HOL Reddit Bridge</title>
+  <title>HOL Genealogy Research Listener</title>
   <style>
-    body { font-family: sans-serif; width: 360px; padding: 12px; }
+    body { font-family: sans-serif; width: 390px; padding: 12px; line-height: 1.35; }
     label { display: block; margin-top: 8px; font-weight: bold; }
     input { width: 100%; box-sizing: border-box; }
-    button { margin-top: 10px; width: 100%; padding: 8px; }
+    button { margin-top: 9px; width: 100%; padding: 8px; }
+    #guide { background: #f4f4f4; padding: 10px; margin-top: 10px; }
     #status { margin-top: 10px; white-space: pre-wrap; }
   </style>
 </head>
 <body>
-  <h2>HOL Reddit Bridge</h2>
-  <p>Default: r/LocalLLaMA. Change it after ChatGPT recommends a subreddit.</p>
+  <h2>HOL Genealogy Research Listener</h2>
+  <div id="guide">
+    <strong>Reddit test workflow</strong><br>
+    1. Open r/Genealogy.<br>
+    2. Click Reddit’s <strong>Join</strong> button yourself.<br>
+    3. Read the rules and FAQ.<br>
+    4. Use <strong>Research Assistance</strong> flair for a specific ancestor conflict.<br>
+    5. Do not post details about living people.<br>
+    6. Correct the impossible Adaline date before posting: a 1935 birth cannot precede a 1918 death.
+  </div>
   <label>Local server</label>
   <input id="serverUrl" value="http://127.0.0.1:2526">
   <label>Bridge token</label>
   <input id="token" type="password">
   <label>Subreddit label</label>
-  <input id="subreddit" value="LocalLLaMA">
+  <input id="subreddit" value="Genealogy">
   <button id="save">Save Settings</button>
+  <button id="openGenealogy">Open r/Genealogy</button>
+  <button id="testOllama">Test Ollama Response</button>
   <button id="capture">Capture Current Visible Reddit Thread</button>
   <button id="timestamp">Copy Encrypted Timestamp</button>
   <div id="status"></div>

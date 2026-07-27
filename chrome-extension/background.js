@@ -1,7 +1,7 @@
 
 const DEFAULTS = {
   serverUrl: "http://127.0.0.1:2526",
-  subreddit: "LocalLLaMA",
+  subreddit: "Genealogy",
   token: "",
   monitoring: false
 };
