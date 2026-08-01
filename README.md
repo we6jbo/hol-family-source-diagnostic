@@ -512,3 +512,20 @@ Emergency indicators are 95% disk use, 95% inode use, less than 1 GiB free, at l
 ## Project Readiness Check (version 1.3.8)
 
 The main HOL window includes a green **PROJECT READINESS CHECK** button. It performs a local, non-destructive review of the canonical project and copies a plain-text report to the clipboard. The report checks required companion modules, the running and installed versions, Git working-tree status, the user updater service, Ollama availability, the unpacked Chrome extension copy, the optional communication password file, `/tmp` capacity, project backup count, the QVIX socket, and the localhost bridge address. It does not print passwords or tokens.
+
+
+## Tabbed interface and visual intelligence (version 1.3.9)
+
+Version 1.3.9 uses three permanent tabs in this order: **Main**, **Config**, and **Config - Advanced**. All controls from earlier versions are contained in Config - Advanced. The first two tabs are intentionally protected by source comments instructing future ChatGPT updates not to add controls unless Jeremiah explicitly asks.
+
+The Main tab has an editable version selector for 1.3.9 and later. Selecting a version never changes program behavior. It displays a saved schematic and JSON description from `~/.config/hol-family-source-diagnostic/tab-visual-history.json`. The recommendation area stores an editable preferred tab and reason in `tab-intelligence.json`. A clipboard handoff lets ChatGPT review the current visual state, while direct communication with ChatGPT still requires the user to paste that handoff into ChatGPT.
+
+### Isolated 1.3.9 GitHub marker process
+
+The 1.3.9-only process targets July 21, 2026 at 8:30 PM Pacific. Because this date is already past, it begins when 1.3.9 starts. It stages and commits only `jul3126-proc.txt`, pushes `origin main`, and checks the following raw URL every ten minutes:
+
+```text
+https://raw.githubusercontent.com/we6jbo/hol-family-source-diagnostic/refs/heads/main/jul3126-proc.txt
+```
+
+This timer is separate from all pre-existing GitHub upload features. Until the raw marker is confirmed, a conditional fourth tab named **Troubleshoot GitHub** displays sanitized diagnostics. Its editable Share to ChatGPT textbox begins with `hi chatgpt` and ends by asking ChatGPT to tell Mr Jeremiah O'Neal what the tab shows and what to do next. The fourth tab disappears after the raw marker is confirmed.

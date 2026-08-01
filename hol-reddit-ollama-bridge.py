@@ -23,6 +23,7 @@ import base64
 import re
 from collections import deque
 import random
+import queue
 import secrets
 import shutil
 import socket
@@ -39,6 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 APP_DIR = Path("/tmp/datediag")
@@ -51,7 +53,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.8"
+APP_VERSION = "1.3.9"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -61,6 +63,13 @@ NIGHTLY_THEME_MINUTE = 30
 RESPONSES_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/responses.json")
 RECORDED_SUMMARIES_FILE = Path.home() / ".recorded-summary.jsonl"
 SUPERVISED_SESSION_SECONDS = 20 * 60
+PROJECT_ROOT = Path("/tmp/to-github/hol-family-source-diagnostic")
+TAB_VISUAL_HISTORY_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "tab-visual-history.json"
+TAB_INTELLIGENCE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "tab-intelligence.json"
+GITHUB_139_MARKER_FILE = PROJECT_ROOT / "jul3126-proc.txt"
+GITHUB_139_RAW_URL = "https://raw.githubusercontent.com/we6jbo/hol-family-source-diagnostic/refs/heads/main/jul3126-proc.txt"
+GITHUB_139_TARGET = dt.datetime(2026, 7, 21, 20, 30, tzinfo=LOCAL_TIMEZONE)
+GITHUB_139_RETRY_MS = 10 * 60 * 1000
 GENEALOGY_RESEARCH_FACTS = {
     "subject": "Adaline A. Holderman",
     "birth": "24 Apr 1835, Marion County, Ohio, USA",
@@ -2311,6 +2320,14 @@ class App:
         self.supervised_session_active = False
         self.safety_pause_active = False
         self.last_supervised_activity = 0.0
+        self.github_139_lock = threading.Lock()
+        self.github_139_ui_queue: queue.Queue[str] = queue.Queue()
+        self.github_139_thread_started = False
+        self.github_139_finished = False
+        self.github_139_last_diagnostics = "The version 1.3.9 GitHub marker process has not run yet."
+        self.troubleshoot_tab = None
+        self.troubleshoot_text = None
+        self.troubleshoot_share_text = None
 
         # Overall IRC experiment fallback. This is separate from the
         # shorter per-channel rotation timers.
@@ -2322,7 +2339,23 @@ class App:
             daemon=True,
         ).start()
 
-        theme_frame = tk.Frame(root)
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
+
+        # Chatgpt, do not add anything in this tab unless I ask you to.
+        self.main_tab = tk.Frame(self.notebook)
+        self.notebook.add(self.main_tab, text="Main")
+
+        # Chatgpt, do not add anything in this tab unless I ask you to.
+        self.config_tab = tk.Frame(self.notebook)
+        self.notebook.add(self.config_tab, text="Config")
+
+        self.advanced_tab = tk.Frame(self.notebook)
+        self.notebook.add(self.advanced_tab, text="Config - Advanced")
+
+        self._build_main_tab()
+        self._build_config_tab()
+        theme_frame = tk.Frame(self.advanced_tab)
         theme_frame.pack(fill="x", padx=12, pady=(10, 0))
 
         self.clock_var = tk.StringVar(value="Loading Pacific time...")
@@ -2354,7 +2387,7 @@ class App:
         self.theme_button.pack(side="right")
 
         irc_network_frame = tk.LabelFrame(
-            root,
+            self.advanced_tab,
             text="IRC Network Selection",
             padx=8,
             pady=8,
@@ -2411,7 +2444,7 @@ class App:
 
         self.irc_channel_details_var = tk.StringVar(value="")
         self.irc_channel_details_label = tk.Label(
-            root,
+            self.advanced_tab,
             textvariable=self.irc_channel_details_var,
             anchor="w",
             justify="left",
@@ -2421,7 +2454,7 @@ class App:
         self.refresh_builtin_channels()
 
         nickserv_command_frame = tk.LabelFrame(
-            root,
+            self.advanced_tab,
             text="NickServ Command",
             padx=8,
             pady=8,
@@ -2449,7 +2482,7 @@ class App:
         ).pack(side="left", padx=5)
 
         irc_diagnostic_frame = tk.LabelFrame(
-            root,
+            self.advanced_tab,
             text="IRC Listener Controls",
             padx=8,
             pady=8,
@@ -2470,7 +2503,7 @@ class App:
         )
 
         manual_irc_frame = tk.LabelFrame(
-            root,
+            self.advanced_tab,
             text="Send a User-Approved IRC Message",
             padx=8,
             pady=8,
@@ -2501,13 +2534,13 @@ class App:
             font=("TkDefaultFont", 10, "bold"),
         ).pack(side="left", padx=5)
         tk.Label(
-            root,
+            self.advanced_tab,
             text="Messages are sent only when you press the button or Enter. Background and drafted messages are not sent automatically.",
             anchor="w",
         ).pack(fill="x", padx=18, pady=(0, 4))
 
         supervised_frame = tk.LabelFrame(
-            root,
+            self.advanced_tab,
             text="Supervised Genealogy Research (no automatic posting)",
             padx=8,
             pady=8,
@@ -2550,9 +2583,9 @@ class App:
             command=self.view_recorded_summaries,
         ).pack(side="left", padx=4)
         self.supervised_status_var = tk.StringVar(value="Supervised mode idle. Messages are never sent automatically.")
-        tk.Label(root, textvariable=self.supervised_status_var, anchor="w").pack(fill="x", padx=18, pady=(0,4))
+        tk.Label(self.advanced_tab, textvariable=self.supervised_status_var, anchor="w").pack(fill="x", padx=18, pady=(0,4))
 
-        self.draft_frame = tk.LabelFrame(root, text="Reviewable Draft (copy manually; never auto-sent)", padx=8, pady=8)
+        self.draft_frame = tk.LabelFrame(self.advanced_tab, text="Reviewable Draft (copy manually; never auto-sent)", padx=8, pady=8)
         self.draft_frame.pack(fill="x", padx=12, pady=(4,2))
         self.supervised_draft = tk.Text(self.draft_frame, height=5, wrap="word")
         self.supervised_draft.pack(side="left", fill="x", expand=True)
@@ -2560,7 +2593,7 @@ class App:
         tk.Button(self.draft_frame, text="Clear Draft", command=lambda: self.supervised_draft.delete("1.0", "end")).pack(side="left", padx=2)
 
         tk.Label(
-            root,
+            self.advanced_tab,
             text=(
                 "Reserves 127.0.0.1:2526, receives visible Reddit thread text from "
                 "the companion Chrome extension, timestamps public records with the "
@@ -2570,7 +2603,7 @@ class App:
             justify="left",
         ).pack(fill="x", padx=12, pady=10)
 
-        form = tk.Frame(root)
+        form = tk.Frame(self.advanced_tab)
         form.pack(fill="x", padx=12)
 
         tk.Label(form, text="Bridge address:").grid(row=0, column=0, sticky="w")
@@ -2593,7 +2626,7 @@ class App:
         )
         tk.Button(form, text="Generate / Copy", command=self.copy_timestamp).grid(row=2, column=2)
 
-        buttons = tk.Frame(root)
+        buttons = tk.Frame(self.advanced_tab)
         buttons.pack(fill="x", padx=12, pady=10)
         tk.Button(buttons, text="Test Ollama Response", command=self.test_ollama).pack(side="left")
         tk.Button(buttons, text="Upload Source to GitHub", command=self.upload).pack(side="left", padx=8)
@@ -2636,15 +2669,17 @@ class App:
         ).pack(side="left", padx=8)
 
         self.status_var = tk.StringVar(value="Starting localhost bridge...")
-        tk.Label(root, textvariable=self.status_var, anchor="w").pack(fill="x", padx=12)
+        tk.Label(self.advanced_tab, textvariable=self.status_var, anchor="w").pack(fill="x", padx=12)
 
-        self.output = scrolledtext.ScrolledText(root, wrap="word")
+        self.output = scrolledtext.ScrolledText(self.advanced_tab, wrap="word")
         self.output.pack(fill="both", expand=True, padx=12, pady=12)
         self.output.insert("1.0", CHATGPT_EVIDENCE)
         self.apply_theme(self.theme_name, announce=False)
         self._update_clock()
         self.root.after(30_000, self._automatic_startup_upload)
         self.root.after(1_000, self._scheduled_automation_tick)
+        self.root.after(500, self._drain_github_139_ui_queue)
+        self.root.after(2_000, self._start_github_139_process)
 
         try:
             self.server = start_server(self.state)
@@ -2654,6 +2689,447 @@ class App:
             self.status(f"Bridge startup failed: {type(exc).__name__}: {exc}")
             messagebox.showerror("Bridge startup failed", str(exc))
 
+
+    def _build_main_tab(self) -> None:
+        """Build the intentionally minimal first tab and its visual history."""
+        container = tk.Frame(self.main_tab, padx=18, pady=18)
+        container.pack(fill="both", expand=True)
+        tk.Label(
+            container,
+            text="HOL Tab Visual History and Recommendation",
+            font=("TkDefaultFont", 16, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            container,
+            text=(
+                "Choose any version 1.3.9 or later. This selection only changes the "
+                "saved visual description shown here; it never changes program behavior."
+            ),
+            justify="left",
+            wraplength=900,
+        ).pack(anchor="w", pady=(6, 10))
+
+        version_row = tk.Frame(container)
+        version_row.pack(fill="x")
+        tk.Label(version_row, text="Visual version:").pack(side="left")
+        self.visual_version_var = tk.StringVar(value=APP_VERSION)
+        self.visual_version_combo = ttk.Combobox(
+            version_row,
+            textvariable=self.visual_version_var,
+            values=self._known_visual_versions(),
+            state="normal",
+            width=18,
+        )
+        self.visual_version_combo.pack(side="left", padx=8)
+        self.visual_version_combo.bind("<<ComboboxSelected>>", lambda _e: self._show_visual_version())
+        self.visual_version_combo.bind("<Return>", lambda _e: self._show_visual_version())
+        tk.Button(version_row, text="Show Version Layout", command=self._show_visual_version).pack(side="left")
+        tk.Button(version_row, text="Save Current Tab Snapshot", command=self._save_current_tab_snapshot).pack(side="left", padx=8)
+
+        self.visual_canvas = tk.Canvas(container, height=190, highlightthickness=1)
+        self.visual_canvas.pack(fill="x", pady=(12, 4))
+        self.visual_preview = scrolledtext.ScrolledText(container, height=10, wrap="word")
+        self.visual_preview.pack(fill="both", expand=True, pady=(4, 12))
+
+        rec = tk.LabelFrame(container, text="Recommended Tab", padx=10, pady=10)
+        rec.pack(fill="x", side="bottom")
+        # Chatgpt, please put which tab i should use based on what would be most helpful for me.
+        self.recommended_tab_var = tk.StringVar(value=self._load_tab_intelligence().get("recommended_tab", "Main"))
+        self.recommended_reason_var = tk.StringVar(value=self._load_tab_intelligence().get(
+            "reason",
+            "Use Main to review the layout and recommendation. Use Config - Advanced for IRC, Reddit, Ollama, GitHub, and diagnostics.",
+        ))
+        row = tk.Frame(rec)
+        row.pack(fill="x")
+        tk.Label(row, text="Tab to use:").pack(side="left")
+        self.recommended_tab_combo = ttk.Combobox(
+            row,
+            textvariable=self.recommended_tab_var,
+            values=("Main", "Config", "Config - Advanced", "Troubleshoot GitHub"),
+            state="normal",
+            width=24,
+        )
+        self.recommended_tab_combo.pack(side="left", padx=8)
+        tk.Button(row, text="Use This Tab", command=self._use_recommended_tab).pack(side="left")
+        tk.Button(row, text="Save Recommendation", command=self._save_tab_recommendation).pack(side="left", padx=8)
+        tk.Button(row, text="Copy Tab Intelligence Handoff", command=self._copy_tab_intelligence_handoff).pack(side="left")
+        tk.Entry(rec, textvariable=self.recommended_reason_var).pack(fill="x", pady=(8, 0))
+        self._save_current_tab_snapshot(silent=True)
+        self._show_visual_version()
+
+    def _build_config_tab(self) -> None:
+        """Build the intentionally reserved second tab."""
+        holder = tk.Frame(self.config_tab, padx=24, pady=24)
+        holder.pack(fill="both", expand=True)
+        tk.Label(
+            holder,
+            text="Config",
+            font=("TkDefaultFont", 18, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            holder,
+            text=(
+                "This tab is intentionally reserved. ChatGPT should not add controls "
+                "here unless Jeremiah explicitly asks for them."
+            ),
+            justify="left",
+            wraplength=850,
+        ).pack(anchor="w", pady=(10, 0))
+
+    def _known_visual_versions(self) -> tuple[str, ...]:
+        data = self._load_visual_history()
+        versions = set(data.get("versions", {}).keys())
+        versions.add(APP_VERSION)
+        return tuple(sorted(versions, key=self._version_tuple))
+
+    @staticmethod
+    def _version_tuple(value: str) -> tuple[int, ...]:
+        try:
+            return tuple(int(part) for part in value.strip().lstrip("v").split("."))
+        except Exception:
+            return (0,)
+
+    def _load_visual_history(self) -> dict:
+        try:
+            data = json.loads(TAB_VISUAL_HISTORY_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {"versions": {}}
+        except Exception:
+            return {"versions": {}}
+
+    def _current_visual_snapshot(self) -> dict:
+        return {
+            "version": APP_VERSION,
+            "captured_at": dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat(),
+            "tabs": ["Main", "Config", "Config - Advanced"],
+            "main": [
+                "Editable visual-version selector for 1.3.9 and later",
+                "Read-only visual description of the selected version",
+                "Editable recommended-tab selection and reason",
+                "Tab intelligence handoff for ChatGPT",
+            ],
+            "config": ["Reserved until Jeremiah explicitly requests controls"],
+            "config_advanced": [
+                "Live Pacific clock and theme control",
+                "IRC network, channel, NickServ, and manual-message controls",
+                "Supervised genealogy research drafts and summaries",
+                "Reddit/Ollama bridge configuration",
+                "GitHub, updater, recovery, and readiness controls",
+                "Status and diagnostic output",
+            ],
+            "conditional_tab": "Troubleshoot GitHub appears only while jul3126-proc.txt is not confirmed on GitHub.",
+        }
+
+    def _save_current_tab_snapshot(self, silent: bool = False) -> None:
+        data = self._load_visual_history()
+        versions = data.setdefault("versions", {})
+        versions[APP_VERSION] = self._current_visual_snapshot()
+        TAB_VISUAL_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TAB_VISUAL_HISTORY_FILE.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        if hasattr(self, "visual_version_combo"):
+            self.visual_version_combo.configure(values=self._known_visual_versions())
+        if not silent:
+            self.status(f"Saved the {APP_VERSION} tab visual snapshot.")
+
+    def _show_visual_version(self) -> None:
+        if not hasattr(self, "visual_preview"):
+            return
+        version = self.visual_version_var.get().strip().lstrip("v")
+        if self._version_tuple(version) < self._version_tuple("1.3.9"):
+            text = "Only version 1.3.9 and later are supported by this visual selector."
+        else:
+            snapshot = self._load_visual_history().get("versions", {}).get(version)
+            if snapshot is None:
+                text = (
+                    f"No visual snapshot has been saved for HOL v{version}.\n\n"
+                    "Selecting this value does not change any program behavior. A future update "
+                    "can save its tab description here without altering older snapshots."
+                )
+            else:
+                text = json.dumps(snapshot, indent=2)
+        self.visual_preview.delete("1.0", "end")
+        self.visual_preview.insert("1.0", text)
+        self._draw_visual_snapshot(version, snapshot if 'snapshot' in locals() else None)
+
+    def _draw_visual_snapshot(self, version: str, snapshot: dict | None) -> None:
+        """Draw a simple visual map so old tab layouts can be recognized at a glance."""
+        if not hasattr(self, "visual_canvas"):
+            return
+        c = self.visual_canvas
+        c.delete("all")
+        width = max(c.winfo_width(), 820)
+        c.configure(scrollregion=(0, 0, width, 190))
+        c.create_rectangle(8, 8, width - 8, 182, outline="#64748B", width=2)
+        c.create_text(22, 20, anchor="nw", text=f"HOL v{version} tab layout", font=("TkDefaultFont", 12, "bold"))
+        if snapshot is None:
+            c.create_text(22, 62, anchor="nw", text="No saved visual snapshot for this future version.", font=("TkDefaultFont", 11))
+            return
+        tabs = snapshot.get("tabs", ["Main", "Config", "Config - Advanced"])
+        x = 22
+        for index, name in enumerate(tabs):
+            tab_width = max(105, 14 * len(name))
+            c.create_rectangle(x, 48, x + tab_width, 78, fill="#5B2C83" if index == 0 else "#334155", outline="#CBD5E1")
+            c.create_text(x + tab_width / 2, 63, text=name, fill="#FFF4A3" if index == 0 else "#E2E8F0", font=("TkDefaultFont", 9, "bold"))
+            x += tab_width + 5
+        sections = [
+            ("Main: visual history + recommendation", 22, 96, 285),
+            ("Config: intentionally reserved", 315, 96, 545),
+            ("Advanced: IRC, Reddit, Ollama, GitHub", 575, 96, width - 22),
+        ]
+        for label, x1, y1, x2 in sections:
+            c.create_rectangle(x1, y1, x2, 155, outline="#60A5FA", width=2)
+            c.create_text((x1 + x2) / 2, 125, text=label, width=max(100, x2-x1-12), justify="center")
+        if snapshot.get("conditional_tab"):
+            c.create_text(22, 166, anchor="w", text="Conditional fourth tab: Troubleshoot GitHub", font=("TkDefaultFont", 9, "italic"))
+
+    def _load_tab_intelligence(self) -> dict:
+        try:
+            data = json.loads(TAB_INTELLIGENCE_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_tab_recommendation(self) -> None:
+        data = {
+            "recommended_tab": self.recommended_tab_var.get().strip() or "Main",
+            "reason": self.recommended_reason_var.get().strip(),
+            "updated_at": dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat(),
+            "updated_by": "user-or-ChatGPT-package",
+        }
+        TAB_INTELLIGENCE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TAB_INTELLIGENCE_FILE.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        self.status("Saved the tab recommendation. Future ChatGPT-created updates may modify this recommendation.")
+
+    def _use_recommended_tab(self) -> None:
+        wanted = self.recommended_tab_var.get().strip()
+        for tab_id in self.notebook.tabs():
+            if self.notebook.tab(tab_id, "text") == wanted:
+                self.notebook.select(tab_id)
+                return
+        messagebox.showinfo("Tab unavailable", f"The tab named {wanted!r} is not currently visible.")
+
+    def _copy_tab_intelligence_handoff(self) -> None:
+        report = {
+            "request": "ChatGPT, review the tab visual state and recommend which tab Jeremiah should use.",
+            "running_version": APP_VERSION,
+            "selected_visual_version": self.visual_version_var.get().strip(),
+            "saved_recommendation": self._load_tab_intelligence(),
+            "current_snapshot": self._current_visual_snapshot(),
+            "github_139_diagnostics": self.github_139_last_diagnostics,
+            "instruction": "Do not add anything to Main or Config unless Jeremiah explicitly asks.",
+        }
+        text = json.dumps(report, indent=2)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update()
+        self.status("Copied the tab intelligence handoff for ChatGPT.")
+
+    def _start_github_139_process(self) -> None:
+        if self.github_139_finished or self.github_139_thread_started:
+            return
+        self.github_139_thread_started = True
+        threading.Thread(target=self._github_139_loop, daemon=True).start()
+
+    def _github_139_loop(self) -> None:
+        """Run the isolated check without making Tk calls from a worker thread."""
+        while not self.github_139_finished:
+            self._github_139_worker()
+            if not self.github_139_finished:
+                time.sleep(GITHUB_139_RETRY_MS / 1000)
+
+    def _drain_github_139_ui_queue(self) -> None:
+        try:
+            while True:
+                action = self.github_139_ui_queue.get_nowait()
+                if action == "ensure":
+                    self._ensure_troubleshoot_tab()
+                elif action == "remove":
+                    self._remove_troubleshoot_tab()
+                elif action == "refresh":
+                    self._refresh_troubleshoot_tab()
+        except queue.Empty:
+            pass
+        try:
+            if self.root.winfo_exists():
+                self.root.after(500, self._drain_github_139_ui_queue)
+        except tk.TclError:
+            pass
+
+    def _github_139_worker(self) -> None:
+        if not self.github_139_lock.acquire(blocking=False):
+            return
+        try:
+            if self._github_139_raw_exists():
+                self.github_139_finished = True
+                self.github_139_last_diagnostics = (
+                    "The GitHub raw marker exists. The isolated version 1.3.9 process is complete."
+                )
+                self.github_139_ui_queue.put("remove")
+                return
+
+            now = dt.datetime.now(tz=LOCAL_TIMEZONE)
+            if now < GITHUB_139_TARGET:
+                self.github_139_last_diagnostics = (
+                    f"Waiting until {GITHUB_139_TARGET.isoformat()} before attempting the isolated 1.3.9 marker commit."
+                )
+                self.github_139_ui_queue.put("ensure")
+                return
+
+            diagnostics = self._attempt_github_139_marker_commit()
+            self.github_139_last_diagnostics = diagnostics
+            self.github_139_ui_queue.put("ensure")
+            if self._github_139_raw_exists():
+                self.github_139_finished = True
+                self.github_139_last_diagnostics += "\n\nThe raw GitHub marker is now available. The process has stopped."
+                self.github_139_ui_queue.put("remove")
+        finally:
+            self.github_139_lock.release()
+
+    def _github_139_raw_exists(self) -> bool:
+        try:
+            req = Request(GITHUB_139_RAW_URL, headers={"User-Agent": f"HOL/{APP_VERSION}"})
+            with urlopen(req, timeout=12) as response:
+                return response.status == 200 and b"HOL 1.3.9" in response.read(4096)
+        except Exception:
+            return False
+
+    def _run_git_139(self, *args: str, timeout: int = 60) -> tuple[int, str]:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(PROJECT_ROOT), *args],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+                check=False,
+            )
+            return result.returncode, result.stdout.strip()
+        except Exception as exc:
+            return 99, f"{type(exc).__name__}: {exc}"
+
+    @staticmethod
+    def _redact_git_text(text: str) -> str:
+        text = re.sub(r"https://[^/@\s]+@", "https://[CREDENTIALS-REDACTED]@", text)
+        text = re.sub(r"(?i)(token|password|secret)=\S+", r"\1=[REDACTED]", text)
+        return text
+
+    def _attempt_github_139_marker_commit(self) -> str:
+        lines = [
+            "HOL 1.3.9 ISOLATED GITHUB MARKER PROCESS",
+            f"Current time: {dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat()}",
+            f"Requested target: {GITHUB_139_TARGET.isoformat()} (already past when 1.3.9 was created)",
+            f"Project root: {PROJECT_ROOT}",
+            f"Raw marker URL: {GITHUB_139_RAW_URL}",
+            "This process stages and commits only jul3126-proc.txt. It does not replace prior Git automation.",
+        ]
+        if not PROJECT_ROOT.is_dir():
+            return "\n".join(lines + ["ERROR: project root is missing."])
+        try:
+            marker = (
+                "HOL 1.3.9 scheduled GitHub process marker\n"
+                "Purpose: confirm that the isolated 1.3.9 marker commit reached GitHub.\n"
+                "This file contains no passwords, tokens, email addresses, IP addresses, or private genealogy details.\n"
+            )
+            GITHUB_139_MARKER_FILE.write_text(marker, encoding="utf-8")
+        except Exception as exc:
+            return "\n".join(lines + [f"ERROR writing marker: {type(exc).__name__}: {exc}"])
+
+        for args, label, timeout in [
+            (("status", "--short", "--branch"), "Git status before marker commit", 30),
+            (("add", "--", GITHUB_139_MARKER_FILE.name), "Stage only jul3126-proc.txt", 30),
+            (("diff", "--cached", "--name-status", "--", GITHUB_139_MARKER_FILE.name), "Staged marker check", 30),
+        ]:
+            code, output = self._run_git_139(*args, timeout=timeout)
+            lines.extend([f"\n{label}: returncode={code}", self._redact_git_text(output)])
+
+        code, output = self._run_git_139(
+            "diff", "--cached", "--quiet", "--", GITHUB_139_MARKER_FILE.name, timeout=30
+        )
+        if code == 1:
+            code, output = self._run_git_139(
+                "commit",
+                "-m",
+                "Add HOL 1.3.9 scheduled GitHub process marker",
+                "--",
+                GITHUB_139_MARKER_FILE.name,
+                timeout=90,
+            )
+            lines.extend([f"\nCommit marker: returncode={code}", self._redact_git_text(output)])
+        elif code == 0:
+            lines.append("\nMarker file has no new staged change; a prior commit may already contain it.")
+        else:
+            lines.extend([f"\nCould not inspect staged marker: returncode={code}", self._redact_git_text(output)])
+
+        code, output = self._run_git_139("push", "origin", "main", timeout=180)
+        lines.extend([f"\nPush origin main: returncode={code}", self._redact_git_text(output)])
+        lines.append(
+            "\nThe process will recheck the raw URL every 10 minutes. It ends only after that URL is confirmed."
+        )
+        return "\n".join(lines)
+
+    def _ensure_troubleshoot_tab(self) -> None:
+        if self.github_139_finished:
+            self._remove_troubleshoot_tab()
+            return
+        if self.troubleshoot_tab is None:
+            self.troubleshoot_tab = tk.Frame(self.notebook)
+            self.notebook.add(self.troubleshoot_tab, text="Troubleshoot GitHub")
+            holder = tk.Frame(self.troubleshoot_tab, padx=12, pady=12)
+            holder.pack(fill="both", expand=True)
+            tk.Label(
+                holder,
+                text="HOL 1.3.9 GitHub Marker Diagnostics",
+                font=("TkDefaultFont", 15, "bold"),
+            ).pack(anchor="w")
+            self.troubleshoot_text = scrolledtext.ScrolledText(holder, height=18, wrap="word")
+            self.troubleshoot_text.pack(fill="both", expand=True, pady=8)
+            tk.Label(holder, text="Share with ChatGPT text:").pack(anchor="w")
+            self.troubleshoot_share_text = scrolledtext.ScrolledText(holder, height=8, wrap="word")
+            self.troubleshoot_share_text.pack(fill="x", pady=(4, 8))
+            tk.Button(
+                holder,
+                text="SHARE TO CHATGPT",
+                command=self._copy_troubleshoot_github_text,
+                background="#FFD400",
+                foreground="#003366",
+                font=("TkDefaultFont", 11, "bold"),
+                borderwidth=4,
+            ).pack(anchor="e")
+        self._refresh_troubleshoot_tab()
+
+    def _refresh_troubleshoot_tab(self) -> None:
+        if self.troubleshoot_text is None or self.troubleshoot_share_text is None:
+            return
+        self.troubleshoot_text.delete("1.0", "end")
+        self.troubleshoot_text.insert("1.0", self.github_139_last_diagnostics)
+        share = (
+            "hi chatgpt\n\n"
+            + self.github_139_last_diagnostics
+            + "\n\ntell Mr Jeremiah O'Neal what he is seeing on tab 4 and what he should do next."
+        )
+        self.troubleshoot_share_text.delete("1.0", "end")
+        self.troubleshoot_share_text.insert("1.0", share)
+
+    def _copy_troubleshoot_github_text(self) -> None:
+        if self.troubleshoot_share_text is None:
+            return
+        text = self.troubleshoot_share_text.get("1.0", "end").strip()
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update()
+        self.status("Copied the Troubleshoot GitHub text for ChatGPT.")
+
+    def _remove_troubleshoot_tab(self) -> None:
+        if self.troubleshoot_tab is not None:
+            try:
+                self.notebook.forget(self.troubleshoot_tab)
+            except Exception:
+                pass
+            self.troubleshoot_tab.destroy()
+            self.troubleshoot_tab = None
+            self.troubleshoot_text = None
+            self.troubleshoot_share_text = None
+        if hasattr(self, "recommended_tab_combo"):
+            self.recommended_tab_combo.configure(values=("Main", "Config", "Config - Advanced"))
 
     def _update_clock(self) -> None:
         """Display a live 12-hour Pacific clock and refresh it every second."""

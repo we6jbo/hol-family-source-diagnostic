@@ -1,3 +1,13 @@
+# Version 1.3.9
+
+- Reorganized the interface into Main, Config, and Config - Advanced tabs.
+- Moved all existing controls into the third Config - Advanced tab.
+- Added an editable visual-version selector and saved schematic tab snapshots for version 1.3.9 and later.
+- Added a persistent, editable recommended-tab module and a clipboard handoff for ChatGPT.
+- Added an isolated July 21, 2026 8:30 PM Pacific GitHub marker process that retries every ten minutes until the raw GitHub marker URL is confirmed.
+- Added a conditional Troubleshoot GitHub fourth tab with diagnostics and a Share to ChatGPT textbox.
+- Added jul3126-proc.txt to the public-source allowlist.
+
 # Version 1.3.8
 
 - Added a prominent Project Readiness Check button.

@@ -27,6 +27,7 @@ publish-to-github.sh
 reinstall-source-tree.sh
 install-extension-to-home.sh
 NEXT-VERSION.md
+jul3126-proc.txt
 PF2F5QTT.md
 setup-pf2f5qtt-private-recovery.sh
 token439873.touch'
