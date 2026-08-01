@@ -1,0 +1,4 @@
+HOL isolated scheduled GitHub process marker
+Created by HOL 1.4.0 using a disposable clean clone.
+Purpose: confirm that the isolated marker reached GitHub without altering the active working tree.
+This file contains no passwords, tokens, email addresses, IP addresses, or private genealogy details.
