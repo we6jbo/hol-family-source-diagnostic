@@ -1,3 +1,10 @@
+# Version 1.3.8
+
+- Added a prominent Project Readiness Check button.
+- The readiness report checks required companion modules, installed/running versions, Git state, updater service, Ollama, Chrome extension copy, communication password presence, /tmp capacity, backup count, QVIX socket, and bridge address.
+- The full report is copied to the clipboard and displayed in the HOL output window.
+- Bumped the Python bridge and Chrome extension manifest consistently to 1.3.8.
+
 # Version 1.3.7
 
 - Displays the running HOL version immediately beside the live Pacific clock.

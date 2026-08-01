@@ -51,7 +51,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.3.8"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -2620,6 +2620,20 @@ class App:
         tk.Button(buttons, text="Open Reddit Workflow", command=self._open_reddit_fallback_window).pack(side="left")
         tk.Button(buttons, text="Check GitHub Sync", command=self.check_github_sync).pack(side="left", padx=8)
         tk.Button(buttons, text="Test GitHub Recovery", command=self.test_github_recovery).pack(side="left")
+        tk.Button(
+            buttons,
+            text="PROJECT READINESS CHECK",
+            command=self.project_readiness_check,
+            background="#18A558",
+            foreground="#FFFFFF",
+            activebackground="#28C76F",
+            activeforeground="#FFFFFF",
+            font=("TkDefaultFont", 10, "bold"),
+            relief="raised",
+            borderwidth=3,
+            padx=10,
+            pady=5,
+        ).pack(side="left", padx=8)
 
         self.status_var = tk.StringVar(value="Starting localhost bridge...")
         tk.Label(root, textvariable=self.status_var, anchor="w").pack(fill="x", padx=12)
@@ -3122,6 +3136,139 @@ class App:
             return
         result = run([str(script)], timeout=180)
         self.status((result.get("stdout") or result.get("stderr") or "GitHub recovery test finished.")[:2000])
+
+    def project_readiness_check(self) -> None:
+        """Run a local, non-destructive readiness review and copy the report."""
+        project = Path("/tmp/to-github/hol-family-source-diagnostic")
+        home_extension = Path.home() / "hol-family-source-diagnostic-extension"
+        required_files = [
+            "hol-reddit-ollama-bridge.py",
+            "QVIX.py",
+            "ada.py",
+            "hol_reddit_adapter.py",
+            "run-reddit-ollama-bridge.sh",
+            "hol-update-watcher.py",
+            "publish-to-github.sh",
+            "chrome-extension/manifest.json",
+            "378876.txt",
+        ]
+        lines = [
+            "HOL FAMILY SOURCE DIAGNOSTIC PROJECT READINESS CHECK",
+            f"Time: {dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat()}",
+            f"Running HOL version: {APP_VERSION}",
+            f"Running Python: {sys.executable}",
+            f"Canonical project: {project}",
+            "",
+        ]
+        failures = 0
+        warnings = 0
+
+        def item(label: str, state: str, detail: str = "") -> None:
+            nonlocal failures, warnings
+            if state == "FAIL":
+                failures += 1
+            elif state == "WARN":
+                warnings += 1
+            suffix = f" | {detail}" if detail else ""
+            lines.append(f"[{state}] {label}{suffix}")
+
+        item("Canonical project directory", "PASS" if project.is_dir() else "FAIL")
+        for relative in required_files:
+            path = project / relative
+            item(f"Required file: {relative}", "PASS" if path.exists() else "FAIL")
+
+        try:
+            manifest = json.loads((project / "chrome-extension/manifest.json").read_text(encoding="utf-8"))
+            disk_version = str(manifest.get("version", "unknown"))
+            item(
+                "Installed manifest version",
+                "PASS" if disk_version == APP_VERSION else "WARN",
+                f"installed={disk_version}, running={APP_VERSION}",
+            )
+        except Exception as exc:
+            item("Installed manifest version", "FAIL", f"{type(exc).__name__}: {exc}")
+
+        try:
+            marker = json.loads(VERSION_MARKER_FILE.read_text(encoding="utf-8"))
+            marker_version = str(marker.get("version", "unknown"))
+            marker_pid = marker.get("pid", "unknown")
+            item(
+                "Running-version marker",
+                "PASS" if marker_version == APP_VERSION else "WARN",
+                f"version={marker_version}, pid={marker_pid}",
+            )
+        except FileNotFoundError:
+            item("Running-version marker", "WARN", "marker file is missing")
+        except Exception as exc:
+            item("Running-version marker", "WARN", f"{type(exc).__name__}: {exc}")
+
+        item(
+            "Home Chrome extension copy",
+            "PASS" if (home_extension / "manifest.json").exists() else "WARN",
+            str(home_extension),
+        )
+
+        if (project / ".git").exists():
+            git_status = run(["git", "-C", str(project), "status", "--porcelain", "--branch"], timeout=30)
+            output = (git_status.get("stdout") or git_status.get("stderr") or "").strip()
+            dirty = any(line and not line.startswith("##") for line in output.splitlines())
+            item("Git working tree", "WARN" if dirty else "PASS", output[:500] or "clean")
+        else:
+            item("Git working tree", "FAIL", ".git directory missing")
+
+        updater = run(["systemctl", "--user", "is-active", "hol-family-source-updater.service"], timeout=15)
+        updater_state = (updater.get("stdout") or updater.get("stderr") or "unknown").strip()
+        item("User updater service", "PASS" if updater_state == "active" else "WARN", updater_state)
+
+        ollama_path = shutil.which("ollama")
+        item("Ollama command", "PASS" if ollama_path else "WARN", ollama_path or "not found")
+        if ollama_path:
+            ollama = run([ollama_path, "list"], timeout=20)
+            item(
+                "Ollama local response",
+                "PASS" if ollama.get("returncode") == 0 else "WARN",
+                (ollama.get("stdout") or ollama.get("stderr") or "no output")[:500],
+            )
+
+        password_file = Path.home() / ".config/hol-family-source-diagnostic/communication_password"
+        item(
+            "Manual communication password file",
+            "PASS" if password_file.exists() else "WARN",
+            "present" if password_file.exists() else "missing; communication.py will not start",
+        )
+
+        try:
+            usage = shutil.disk_usage("/tmp")
+            percent = int(round((usage.used / usage.total) * 100)) if usage.total else 0
+            free_gib = usage.free / (1024 ** 3)
+            state = "FAIL" if percent >= 95 or free_gib < 1 else ("WARN" if percent >= 85 or free_gib < 3 else "PASS")
+            item("/tmp capacity", state, f"used={percent}%, free={free_gib:.2f} GiB")
+        except Exception as exc:
+            item("/tmp capacity", "WARN", f"{type(exc).__name__}: {exc}")
+
+        backups = sorted(project.parent.glob("hol-family-source-diagnostic.backup-*")) if project.parent.exists() else []
+        backup_state = "WARN" if len(backups) > 10 else "PASS"
+        item("HOL backup-directory count", backup_state, f"count={len(backups)}")
+
+        item("QVIX local socket", "PASS" if Path("/tmp/hol-family-source-diagnostic-qvix.sock").exists() else "WARN", "available only while HOL/QVIX is active")
+        item("Bridge port", "PASS", f"http://{HOST}:{PORT}")
+
+        lines.extend([
+            "",
+            f"SUMMARY: failures={failures}, warnings={warnings}",
+            "PASS means ready. WARN means usable but attention may be needed. FAIL means repair before relying on recovery.",
+        ])
+        report = "\n".join(lines) + "\n"
+        self.root.clipboard_clear()
+        self.root.clipboard_append(report)
+        self.root.update()
+        self.output.insert("end", "\n" + report)
+        self.output.see("end")
+        self.status_var.set(f"Project readiness finished: {failures} failure(s), {warnings} warning(s). Report copied.")
+        messagebox.showinfo(
+            "Project readiness check",
+            f"Finished with {failures} failure(s) and {warnings} warning(s).\n\nThe full report was copied to the clipboard and added to the output window.",
+        )
 
     def status(self, text: str) -> None:
         self.root.after(0, self.status_var.set, text)

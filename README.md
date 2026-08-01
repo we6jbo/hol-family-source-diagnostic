@@ -508,3 +508,7 @@ The main HOL window displays a live 12-hour clock with seconds, date, and the cu
 The persistent user updater checks `/tmp` at startup and every five minutes. It never deletes the active project or unrelated temporary files. It may remove only old directories matching `hol-family-source-diagnostic.backup-*`, keeps the newest three, and performs preventive cleanup when more than ten matching backups exist.
 
 Emergency indicators are 95% disk use, 95% inode use, less than 1 GiB free, at least 500,000 counted entries, or at least 2 GiB of HOL backups. A sanitized `PF2F5QTT.md` recovery guide is generated and committed. `setup-pf2f5qtt-private-recovery.sh` creates a private encrypted local-path appendix and `uncensor.sh` under `$HOME/send-to-google-drive`. Keep `uncensor.sh` private because it contains the decryption key by design.
+
+## Project Readiness Check (version 1.3.8)
+
+The main HOL window includes a green **PROJECT READINESS CHECK** button. It performs a local, non-destructive review of the canonical project and copies a plain-text report to the clipboard. The report checks required companion modules, the running and installed versions, Git working-tree status, the user updater service, Ollama availability, the unpacked Chrome extension copy, the optional communication password file, `/tmp` capacity, project backup count, the QVIX socket, and the localhost bridge address. It does not print passwords or tokens.
