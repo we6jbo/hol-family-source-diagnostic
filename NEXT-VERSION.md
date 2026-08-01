@@ -1,8 +1,8 @@
 # HOL Family Source Diagnostic Next Version Plan
 
-## Current release: 1.3.9
+## Current release: 1.3.10
 
-Version 1.3.9 introduces a stable three-tab layout, saved visual snapshots, editable tab recommendations, and an isolated GitHub marker diagnostic process.
+Version 1.3.10 corrects the recommendation control while retaining a stable three-tab layout, saved visual snapshots, editable tab recommendations, and an isolated GitHub marker diagnostic process.
 
 ## Possible next work
 

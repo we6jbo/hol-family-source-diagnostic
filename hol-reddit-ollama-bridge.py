@@ -53,7 +53,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.9"
+APP_VERSION = "1.3.10"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -2731,28 +2731,36 @@ class App:
         self.visual_preview = scrolledtext.ScrolledText(container, height=10, wrap="word")
         self.visual_preview.pack(fill="both", expand=True, pady=(4, 12))
 
-        rec = tk.LabelFrame(container, text="Recommended Tab", padx=10, pady=10)
+        rec = tk.LabelFrame(container, text="Recommended Version", padx=10, pady=10)
         rec.pack(fill="x", side="bottom")
-        # Chatgpt, please put which tab i should use based on what would be most helpful for me.
-        self.recommended_tab_var = tk.StringVar(value=self._load_tab_intelligence().get("recommended_tab", "Main"))
-        self.recommended_reason_var = tk.StringVar(value=self._load_tab_intelligence().get(
+        # Chatgpt, please put which version i should use based on what would be most helpful for me.
+        saved_intelligence = self._load_tab_intelligence()
+        saved_version = str(
+            saved_intelligence.get("recommended_version")
+            or saved_intelligence.get("recommended_tab")
+            or APP_VERSION
+        )
+        if self._version_tuple(saved_version) < self._version_tuple("1.3.9"):
+            saved_version = APP_VERSION
+        self.recommended_version_var = tk.StringVar(value=saved_version)
+        self.recommended_reason_var = tk.StringVar(value=saved_intelligence.get(
             "reason",
-            "Use Main to review the layout and recommendation. Use Config - Advanced for IRC, Reddit, Ollama, GitHub, and diagnostics.",
+            f"Use HOL v{APP_VERSION}, the newest installed version, unless a later tested version is available.",
         ))
         row = tk.Frame(rec)
         row.pack(fill="x")
-        tk.Label(row, text="Tab to use:").pack(side="left")
-        self.recommended_tab_combo = ttk.Combobox(
+        tk.Label(row, text="Version to use:").pack(side="left")
+        self.recommended_version_combo = ttk.Combobox(
             row,
-            textvariable=self.recommended_tab_var,
-            values=("Main", "Config", "Config - Advanced", "Troubleshoot GitHub"),
+            textvariable=self.recommended_version_var,
+            values=self._known_visual_versions(),
             state="normal",
             width=24,
         )
-        self.recommended_tab_combo.pack(side="left", padx=8)
-        tk.Button(row, text="Use This Tab", command=self._use_recommended_tab).pack(side="left")
-        tk.Button(row, text="Save Recommendation", command=self._save_tab_recommendation).pack(side="left", padx=8)
-        tk.Button(row, text="Copy Tab Intelligence Handoff", command=self._copy_tab_intelligence_handoff).pack(side="left")
+        self.recommended_version_combo.pack(side="left", padx=8)
+        tk.Button(row, text="View This Version", command=self._use_recommended_version).pack(side="left")
+        tk.Button(row, text="Save Version Recommendation", command=self._save_version_recommendation).pack(side="left", padx=8)
+        tk.Button(row, text="Copy Version Intelligence Handoff", command=self._copy_version_intelligence_handoff).pack(side="left")
         tk.Entry(rec, textvariable=self.recommended_reason_var).pack(fill="x", pady=(8, 0))
         self._save_current_tab_snapshot(silent=True)
         self._show_visual_version()
@@ -2804,8 +2812,8 @@ class App:
             "main": [
                 "Editable visual-version selector for 1.3.9 and later",
                 "Read-only visual description of the selected version",
-                "Editable recommended-tab selection and reason",
-                "Tab intelligence handoff for ChatGPT",
+                "Editable recommended-version selection and reason",
+                "Version intelligence handoff for ChatGPT",
             ],
             "config": ["Reserved until Jeremiah explicitly requests controls"],
             "config_advanced": [
@@ -2888,31 +2896,35 @@ class App:
         except Exception:
             return {}
 
-    def _save_tab_recommendation(self) -> None:
+    def _save_version_recommendation(self) -> None:
+        version = self.recommended_version_var.get().strip().lstrip("v") or APP_VERSION
+        if self._version_tuple(version) < self._version_tuple("1.3.9"):
+            messagebox.showerror("Unsupported version", "The recommendation must be HOL version 1.3.9 or later.")
+            return
         data = {
-            "recommended_tab": self.recommended_tab_var.get().strip() or "Main",
+            "recommended_version": version,
             "reason": self.recommended_reason_var.get().strip(),
             "updated_at": dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat(),
             "updated_by": "user-or-ChatGPT-package",
         }
         TAB_INTELLIGENCE_FILE.parent.mkdir(parents=True, exist_ok=True)
         TAB_INTELLIGENCE_FILE.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        self.status("Saved the tab recommendation. Future ChatGPT-created updates may modify this recommendation.")
+        self.status("Saved the version recommendation. Future ChatGPT-created updates may modify this recommendation.")
 
-    def _use_recommended_tab(self) -> None:
-        wanted = self.recommended_tab_var.get().strip()
-        for tab_id in self.notebook.tabs():
-            if self.notebook.tab(tab_id, "text") == wanted:
-                self.notebook.select(tab_id)
-                return
-        messagebox.showinfo("Tab unavailable", f"The tab named {wanted!r} is not currently visible.")
+    def _use_recommended_version(self) -> None:
+        version = self.recommended_version_var.get().strip().lstrip("v") or APP_VERSION
+        self.visual_version_var.set(version)
+        self._show_visual_version()
+        self.status(f"Showing the saved visual layout for recommended HOL v{version}. Program behavior was not changed.")
 
-    def _copy_tab_intelligence_handoff(self) -> None:
+    def _copy_version_intelligence_handoff(self) -> None:
         report = {
-            "request": "ChatGPT, review the tab visual state and recommend which tab Jeremiah should use.",
+            "request": "ChatGPT, review the saved visual history and recommend which HOL version Jeremiah should use.",
             "running_version": APP_VERSION,
             "selected_visual_version": self.visual_version_var.get().strip(),
+            "recommended_version": self.recommended_version_var.get().strip(),
             "saved_recommendation": self._load_tab_intelligence(),
+            "known_visual_versions": list(self._known_visual_versions()),
             "current_snapshot": self._current_visual_snapshot(),
             "github_139_diagnostics": self.github_139_last_diagnostics,
             "instruction": "Do not add anything to Main or Config unless Jeremiah explicitly asks.",
@@ -2921,7 +2933,7 @@ class App:
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.root.update()
-        self.status("Copied the tab intelligence handoff for ChatGPT.")
+        self.status("Copied the version intelligence handoff for ChatGPT.")
 
     def _start_github_139_process(self) -> None:
         if self.github_139_finished or self.github_139_thread_started:

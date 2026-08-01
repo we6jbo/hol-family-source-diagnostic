@@ -1,3 +1,9 @@
+# Version 1.3.10
+
+- Corrected the Main-tab recommendation from a tab recommendation to a HOL version recommendation.
+- Added editable version selection, saved version reasoning, visual-only version viewing, and a version intelligence handoff for ChatGPT.
+- Preserved compatibility with older `recommended_tab` data by treating it as legacy and defaulting safely to the current version when it is not a valid version.
+
 # Version 1.3.9
 
 - Reorganized the interface into Main, Config, and Config - Advanced tabs.
