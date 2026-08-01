@@ -1,12 +1,5 @@
-# HOL Family Source Diagnostic Next Version Plan
+# HOL Family Source Diagnostic next-version notes
 
-## Current release: 1.3.10
+## Current release: 1.4.0
 
-Version 1.3.10 corrects the recommendation control while retaining a stable three-tab layout, saved visual snapshots, editable tab recommendations, and an isolated GitHub marker diagnostic process.
-
-## Possible next work
-
-- Preserve real rendered tab screenshots only when Jeremiah explicitly requests it.
-- Add export/import for tab recommendation state.
-- Improve narrow-screen scrolling in Config - Advanced without moving controls into Main or Config.
-- Add tests for the conditional Troubleshoot GitHub tab and raw-marker completion.
+Version 1.4.0 introduces a resilient clean-clone GitHub marker publisher. Future work should avoid adding new Git automation until this isolated process has been observed completing successfully on the T14.

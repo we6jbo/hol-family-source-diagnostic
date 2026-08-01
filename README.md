@@ -534,3 +534,7 @@ This timer is separate from all pre-existing GitHub upload features. Until the r
 ## Version 1.3.10 recommendation correction
 
 The Main tab now recommends which HOL software version to use, not which interface tab to open. The controls are labeled **Recommended Version**, **Version to use**, **View This Version**, **Save Version Recommendation**, and **Copy Version Intelligence Handoff**. Viewing a recommended version changes only the saved visual preview.
+
+## Version 1.4.0 resilient marker synchronization
+
+The isolated `jul3126-proc.txt` process no longer pushes from the active checkout. It clones the newest GitHub `main` branch into a disposable temporary directory, creates or updates only the marker, commits it there, and pushes `HEAD:main`. If the remote changes during the operation, it fetches and rebases only the disposable clone before retrying. The active project may remain ahead, behind, dirty, or contain uncommitted work without being modified by this marker process. No force push is used. Authentication, connectivity, or GitHub outages remain visible in the conditional Troubleshoot GitHub tab and are retried every ten minutes.

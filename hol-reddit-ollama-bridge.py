@@ -31,6 +31,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import tempfile
 import traceback
 import time
 import datetime as dt
@@ -53,7 +54,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.3.10"
+APP_VERSION = "1.4.0"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -2324,7 +2325,7 @@ class App:
         self.github_139_ui_queue: queue.Queue[str] = queue.Queue()
         self.github_139_thread_started = False
         self.github_139_finished = False
-        self.github_139_last_diagnostics = "The version 1.3.9 GitHub marker process has not run yet."
+        self.github_139_last_diagnostics = "The resilient GitHub marker process has not run yet."
         self.troubleshoot_tab = None
         self.troubleshoot_text = None
         self.troubleshoot_share_text = None
@@ -2973,7 +2974,7 @@ class App:
             if self._github_139_raw_exists():
                 self.github_139_finished = True
                 self.github_139_last_diagnostics = (
-                    "The GitHub raw marker exists. The isolated version 1.3.9 process is complete."
+                    "The GitHub raw marker exists. The resilient isolated marker process is complete."
                 )
                 self.github_139_ui_queue.put("remove")
                 return
@@ -2981,7 +2982,7 @@ class App:
             now = dt.datetime.now(tz=LOCAL_TIMEZONE)
             if now < GITHUB_139_TARGET:
                 self.github_139_last_diagnostics = (
-                    f"Waiting until {GITHUB_139_TARGET.isoformat()} before attempting the isolated 1.3.9 marker commit."
+                    f"Waiting until {GITHUB_139_TARGET.isoformat()} before attempting the resilient isolated marker publication."
                 )
                 self.github_139_ui_queue.put("ensure")
                 return
@@ -3000,7 +3001,7 @@ class App:
         try:
             req = Request(GITHUB_139_RAW_URL, headers={"User-Agent": f"HOL/{APP_VERSION}"})
             with urlopen(req, timeout=12) as response:
-                return response.status == 200 and b"HOL 1.3.9" in response.read(4096)
+                return response.status == 200 and bool(response.read(4096).strip())
         except Exception:
             return False
 
@@ -3025,58 +3026,122 @@ class App:
         return text
 
     def _attempt_github_139_marker_commit(self) -> str:
+        """Publish the isolated marker from a disposable clean clone.
+
+        This deliberately does not rebase, stash, reset, or otherwise modify the
+        active project working tree. A clean clone avoids push rejection caused
+        by the active checkout being both ahead of and behind origin/main.
+        """
         lines = [
-            "HOL 1.3.9 ISOLATED GITHUB MARKER PROCESS",
+            "HOL 1.4.0 RESILIENT ISOLATED GITHUB MARKER PROCESS",
             f"Current time: {dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat()}",
-            f"Requested target: {GITHUB_139_TARGET.isoformat()} (already past when 1.3.9 was created)",
-            f"Project root: {PROJECT_ROOT}",
+            f"Original requested target: {GITHUB_139_TARGET.isoformat()}",
+            f"Active project root: {PROJECT_ROOT}",
             f"Raw marker URL: {GITHUB_139_RAW_URL}",
-            "This process stages and commits only jul3126-proc.txt. It does not replace prior Git automation.",
+            "The marker is published from a disposable clean clone.",
+            "The active working tree, local commits, stashes, and prior Git automation are not modified.",
         ]
         if not PROJECT_ROOT.is_dir():
             return "\n".join(lines + ["ERROR: project root is missing."])
+
+        code, remote_url = self._run_git_139("remote", "get-url", "origin", timeout=30)
+        if code != 0 or not remote_url.strip():
+            remote_url = REPO_URL
+            lines.extend(["", "Could not read origin from the active checkout; using the configured repository URL."])
+        remote_url = remote_url.strip()
+        lines.append(f"Repository remote: {self._redact_git_text(remote_url)}")
+
+        temporary_parent = Path(tempfile.mkdtemp(prefix="hol-140-marker-"))
+        clean_clone = temporary_parent / "repository"
         try:
-            marker = (
-                "HOL 1.3.9 scheduled GitHub process marker\n"
-                "Purpose: confirm that the isolated 1.3.9 marker commit reached GitHub.\n"
+            clone = subprocess.run(
+                ["git", "clone", "--no-tags", "--branch", "main", "--single-branch", remote_url, str(clean_clone)],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240, check=False,
+            )
+            lines.extend([f"\nClean clone: returncode={clone.returncode}", self._redact_git_text(clone.stdout.strip())])
+            if clone.returncode != 0:
+                return "\n".join(lines + ["The process will retry in 10 minutes."])
+
+            marker_text = (
+                "HOL isolated scheduled GitHub process marker\n"
+                "Created by HOL 1.4.0 using a disposable clean clone.\n"
+                "Purpose: confirm that the isolated marker reached GitHub without altering the active working tree.\n"
                 "This file contains no passwords, tokens, email addresses, IP addresses, or private genealogy details.\n"
             )
-            GITHUB_139_MARKER_FILE.write_text(marker, encoding="utf-8")
-        except Exception as exc:
-            return "\n".join(lines + [f"ERROR writing marker: {type(exc).__name__}: {exc}"])
+            marker_path = clean_clone / GITHUB_139_MARKER_FILE.name
+            marker_path.write_text(marker_text, encoding="utf-8")
 
-        for args, label, timeout in [
-            (("status", "--short", "--branch"), "Git status before marker commit", 30),
-            (("add", "--", GITHUB_139_MARKER_FILE.name), "Stage only jul3126-proc.txt", 30),
-            (("diff", "--cached", "--name-status", "--", GITHUB_139_MARKER_FILE.name), "Staged marker check", 30),
-        ]:
-            code, output = self._run_git_139(*args, timeout=timeout)
-            lines.extend([f"\n{label}: returncode={code}", self._redact_git_text(output)])
+            # Reuse configured Git identity when available; otherwise use a local, non-personal identity.
+            for key, fallback in (("user.name", "HOL Family Source Diagnostic"), ("user.email", "hol-local@localhost")):
+                cfg = subprocess.run(
+                    ["git", "-C", str(PROJECT_ROOT), "config", "--get", key],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, check=False,
+                )
+                value = cfg.stdout.strip() or fallback
+                subprocess.run(
+                    ["git", "-C", str(clean_clone), "config", key, value],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20, check=False,
+                )
 
-        code, output = self._run_git_139(
-            "diff", "--cached", "--quiet", "--", GITHUB_139_MARKER_FILE.name, timeout=30
-        )
-        if code == 1:
-            code, output = self._run_git_139(
-                "commit",
-                "-m",
-                "Add HOL 1.3.9 scheduled GitHub process marker",
-                "--",
-                GITHUB_139_MARKER_FILE.name,
-                timeout=90,
+            add = subprocess.run(
+                ["git", "-C", str(clean_clone), "add", "--", marker_path.name],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30, check=False,
             )
-            lines.extend([f"\nCommit marker: returncode={code}", self._redact_git_text(output)])
-        elif code == 0:
-            lines.append("\nMarker file has no new staged change; a prior commit may already contain it.")
-        else:
-            lines.extend([f"\nCould not inspect staged marker: returncode={code}", self._redact_git_text(output)])
+            lines.extend([f"\nStage marker in clean clone: returncode={add.returncode}", self._redact_git_text(add.stdout.strip())])
+            if add.returncode != 0:
+                return "\n".join(lines + ["The process will retry in 10 minutes."])
 
-        code, output = self._run_git_139("push", "origin", "main", timeout=180)
-        lines.extend([f"\nPush origin main: returncode={code}", self._redact_git_text(output)])
-        lines.append(
-            "\nThe process will recheck the raw URL every 10 minutes. It ends only after that URL is confirmed."
-        )
-        return "\n".join(lines)
+            changed = subprocess.run(
+                ["git", "-C", str(clean_clone), "diff", "--cached", "--quiet", "--", marker_path.name],
+                timeout=30, check=False,
+            ).returncode == 1
+            if changed:
+                commit = subprocess.run(
+                    ["git", "-C", str(clean_clone), "commit", "-m", "Add HOL isolated scheduled GitHub marker", "--", marker_path.name],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90, check=False,
+                )
+                lines.extend([f"\nCommit marker in clean clone: returncode={commit.returncode}", self._redact_git_text(commit.stdout.strip())])
+                if commit.returncode != 0:
+                    return "\n".join(lines + ["The process will retry in 10 minutes."])
+            else:
+                lines.append("\nThe current GitHub main branch already contains the same marker content.")
+
+            # A fresh clone normally pushes immediately. If another writer wins the race,
+            # fetch/rebase only the disposable clone and retry, never the active checkout.
+            for attempt in range(1, 4):
+                push = subprocess.run(
+                    ["git", "-C", str(clean_clone), "push", "origin", "HEAD:main"],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180, check=False,
+                )
+                lines.extend([f"\nPush attempt {attempt}/3: returncode={push.returncode}", self._redact_git_text(push.stdout.strip())])
+                if push.returncode == 0:
+                    lines.append("The isolated marker push succeeded without modifying the active checkout.")
+                    break
+                fetch = subprocess.run(
+                    ["git", "-C", str(clean_clone), "fetch", "origin", "main"],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120, check=False,
+                )
+                lines.extend([f"Fetch before retry: returncode={fetch.returncode}", self._redact_git_text(fetch.stdout.strip())])
+                if fetch.returncode != 0:
+                    break
+                rebase = subprocess.run(
+                    ["git", "-C", str(clean_clone), "rebase", "origin/main"],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120, check=False,
+                )
+                lines.extend([f"Rebase disposable clone before retry: returncode={rebase.returncode}", self._redact_git_text(rebase.stdout.strip())])
+                if rebase.returncode != 0:
+                    break
+            else:
+                push = None
+
+            lines.append("\nThe process rechecks the raw URL. If authentication, network access, or GitHub availability prevents confirmation, it retries in 10 minutes and leaves the Troubleshoot GitHub tab visible.")
+            return "\n".join(lines)
+        except Exception as exc:
+            lines.extend(["", f"ERROR during clean-clone marker publication: {type(exc).__name__}: {exc}", traceback.format_exc()])
+            lines.append("The process will retry in 10 minutes.")
+            return "\n".join(lines)
+        finally:
+            shutil.rmtree(temporary_parent, ignore_errors=True)
 
     def _ensure_troubleshoot_tab(self) -> None:
         if self.github_139_finished:
@@ -3089,7 +3154,7 @@ class App:
             holder.pack(fill="both", expand=True)
             tk.Label(
                 holder,
-                text="HOL 1.3.9 GitHub Marker Diagnostics",
+                text="HOL 1.4.0 Resilient GitHub Marker Diagnostics",
                 font=("TkDefaultFont", 15, "bold"),
             ).pack(anchor="w")
             self.troubleshoot_text = scrolledtext.ScrolledText(holder, height=18, wrap="word")
