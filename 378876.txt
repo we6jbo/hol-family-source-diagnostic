@@ -1,3 +1,3 @@
 HOL Family Source Diagnostic recovery marker.
-Required recoverable version: 1.4.4
-Feature: ARTIF learning, running, Google AI workspace, and GitHub lock controls.
+Required recoverable version: 1.4.5
+Feature: isolated /home/fcai3abc ARTIF runtime with visible execution workspaces and shared BZNhWFne.json configuration.

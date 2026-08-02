@@ -1,3 +1,13 @@
+# Version 1.4.5
+
+- Isolated all ARTIF and LEARN-ARTIF lookup, runtime, configuration, diagnostics, logs, state, autorun marker, and lock operations under `/home/fcai3abc`.
+- Removed the HOL project directory as an ARTIF fallback.
+- Changed ARTIF and LEARN-ARTIF launches to open a visible terminal workspace immediately, with live output also recorded under `/home/fcai3abc/logs`.
+- Changed the automatic selector marker to `/home/fcai3abc/autorun-artif.txt`.
+- Updated the Google AI development prompt with the concrete `run.sh` or `main.py` runtime definitions, atomic `INTEL.json` output requirement, and central `/home/fcai3abc/BZNhWFne.json` configuration requirement.
+- Changed LOCK ARTIF to operate only on the Git repository rooted at `/home/fcai3abc`, derive its raw-marker URL from that repository's configured GitHub origin and current branch, and never force push.
+- Added `ARTIF-ARCHITECTURE.json` as the current architecture manifest.
+
 # Version 1.4.4
 
 - Added a dedicated fourth permanent tab named `ARTIF`.
