@@ -1,5 +1,5 @@
-# HOL Family Source Diagnostic next-version notes
+# HOL Family Source Diagnostic Next Version Plan
 
-## Current release: 1.4.0
+## Current release: 1.4.2
 
-Version 1.4.0 introduces a resilient clean-clone GitHub marker publisher. Future work should avoid adding new Git automation until this isolated process has been observed completing successfully on the T14.
+Version 1.4.2 focuses on deterministic recovery after `/tmp` is cleared. Future releases should retain the persistent home-directory recovery cache, graphical-session launch separation, and local-ZIP fallback.

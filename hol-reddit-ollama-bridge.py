@@ -54,7 +54,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.2"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -3033,7 +3033,7 @@ class App:
         by the active checkout being both ahead of and behind origin/main.
         """
         lines = [
-            "HOL 1.4.0 RESILIENT ISOLATED GITHUB MARKER PROCESS",
+            "HOL 1.4.2 RESILIENT ISOLATED GITHUB MARKER PROCESS",
             f"Current time: {dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat()}",
             f"Original requested target: {GITHUB_139_TARGET.isoformat()}",
             f"Active project root: {PROJECT_ROOT}",
@@ -3064,7 +3064,7 @@ class App:
 
             marker_text = (
                 "HOL isolated scheduled GitHub process marker\n"
-                "Created by HOL 1.4.0 using a disposable clean clone.\n"
+                "Created by HOL 1.4.2 using a disposable clean clone.\n"
                 "Purpose: confirm that the isolated marker reached GitHub without altering the active working tree.\n"
                 "This file contains no passwords, tokens, email addresses, IP addresses, or private genealogy details.\n"
             )
@@ -3154,7 +3154,7 @@ class App:
             holder.pack(fill="both", expand=True)
             tk.Label(
                 holder,
-                text="HOL 1.4.0 Resilient GitHub Marker Diagnostics",
+                text="HOL 1.4.2 Resilient GitHub Marker Diagnostics",
                 font=("TkDefaultFont", 15, "bold"),
             ).pack(anchor="w")
             self.troubleshoot_text = scrolledtext.ScrolledText(holder, height=18, wrap="word")

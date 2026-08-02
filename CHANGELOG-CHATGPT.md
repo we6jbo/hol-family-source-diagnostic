@@ -1,13 +1,8 @@
-# Version 1.4.0
+# Version 1.4.2
 
-## Resilient isolated GitHub marker publication
-
-Version 1.4.0 replaces the marker process's direct push from the active working tree with a disposable clean-clone workflow.
-
-- Fetches the current GitHub `main` branch into a temporary clone.
-- Creates or updates only `jul3126-proc.txt` in that clone.
-- Commits and pushes from the clean clone.
-- Retries a fetch and rebase inside only the disposable clone if another writer updates GitHub first.
-- Never stashes, rebases, resets, force-pushes, or modifies the active project checkout.
-- Keeps the Troubleshoot GitHub tab visible for authentication, network, or service failures.
-- Stops the isolated process once the raw marker URL returns a nonempty file.
+- Added a persistent recovery copy under `~/.local/share/hol-family-source-diagnostic/recovery-project`.
+- Graphical-login recovery now restores from the persistent copy first, then the newest Downloads ZIP, then GitHub.
+- GitHub recovery retries after networking becomes available instead of failing permanently during early boot.
+- The graphical helper launches Tkinter directly from the desktop session, avoiding missing `$DISPLAY` failures.
+- Old Downloads ZIP files no longer trigger approval prompts after recovery because the current version is restored before update scanning.
+- Preserves `378876.txt`, settings under `~/.config/hol-family-source-diagnostic`, and secrets under `~/.ircsecrets`.

@@ -12,6 +12,10 @@ LOG_FILE = STATE_DIR / 'updater.log'
 PATTERN = re.compile(r'^hol-family-source-diagnostic-v(\d+)\.(\d+)\.(\d+)\.zip$')
 APPROVAL_FILE = Path.home() / '.config/hol-family-source-diagnostic/confirm-updates'
 CURRENT_STAGE = 'startup'
+RESTORE_RETRY_SECONDS = 60
+GUI_RETRY_SECONDS = 15
+PENDING_GUI_FILE = STATE_DIR / 'pending-gui-start.json'
+PERSISTENT_CACHE = Path.home() / '.local/share/hol-family-source-diagnostic/recovery-project'
 
 TMP_ROOT = Path('/tmp')
 BACKUP_PARENT = Path('/tmp/to-github')
@@ -42,13 +46,22 @@ def identity_summary() -> str:
         except KeyError: groups.append(str(g))
     return f'user={user} uid={uid} group={group} gid={gid} groups={",".join(groups)} home={Path.home()} cwd={Path.cwd()}'
 
-def desktop_approval(version: str, zip_name: str) -> bool:
+def graphical_environment_ready() -> bool:
+    display=os.environ.get('DISPLAY','').strip()
+    wayland=os.environ.get('WAYLAND_DISPLAY','').strip()
+    return bool(display or wayland)
+
+def desktop_approval(version: str, zip_name: str) -> bool | None:
+    """Return True/False, or None when approval must wait for a GUI session."""
     if not APPROVAL_FILE.exists():
         return True
+    if not graphical_environment_ready():
+        log(f'Approval for {version} deferred: no DISPLAY or WAYLAND_DISPLAY is available yet.')
+        return None
     zenity=shutil.which('zenity')
     if not zenity:
         log(f'Approval requested for {version}, but zenity is unavailable; update deferred.')
-        return False
+        return None
     env=os.environ.copy()
     cp=subprocess.run([zenity, '--question', '--title=HOL Update Permission',
                        '--text', f'Install HOL Family Source Diagnostic {version} from {zip_name}?',
@@ -107,37 +120,47 @@ def stop_bridge() -> None:
         except Exception as e: log('Could not stop old bridge: '+repr(e))
         PID_FILE.unlink(missing_ok=True)
 
-def start_bridge(expected_version: str | None = None) -> None:
+def start_bridge(expected_version: str | None = None) -> bool:
+    if not graphical_environment_ready():
+        PENDING_GUI_FILE.parent.mkdir(parents=True,exist_ok=True)
+        PENDING_GUI_FILE.write_text(json.dumps({'version':expected_version,'reason':'graphical environment unavailable'},indent=2)+'\n',encoding='utf-8')
+        log(f'Bridge start deferred for version {expected_version or "unknown"}: no graphical display is available. The graphical-login helper will retry.')
+        return False
     logf=(STATE_DIR/'bridge.log').open('a')
     command=['/bin/sh', str(TARGET/'run-reddit-ollama-bridge.sh')]
     log(f'Starting bridge as {identity_summary()} command={command!r}')
-    p=subprocess.Popen(command,cwd=TARGET,stdout=logf,stderr=subprocess.STDOUT,start_new_session=True)
+    p=subprocess.Popen(command,cwd=TARGET,stdout=logf,stderr=subprocess.STDOUT,start_new_session=True,env=os.environ.copy())
     PID_FILE.write_text(str(p.pid))
     log(f'Started bridge launcher PID {p.pid}')
     if expected_version:
         marker=Path('/tmp/thecurversionofthisis.json')
-        deadline=time.time()+15
+        deadline=time.time()+25
         while time.time()<deadline:
             try:
                 data=json.loads(marker.read_text(encoding='utf-8'))
                 if data.get('version') == expected_version:
+                    PENDING_GUI_FILE.unlink(missing_ok=True)
                     log(f'Verified running bridge version {expected_version}, pid={data.get("pid")}, program={data.get("program")}')
-                    return
+                    return True
             except Exception:
                 pass
             if p.poll() is not None:
                 raise RuntimeError(f'bridge launcher exited with return code {p.returncode}; see {STATE_DIR/"bridge.log"}')
             time.sleep(.5)
-        raise RuntimeError(f'bridge did not publish expected version {expected_version} within 15 seconds; see {STATE_DIR/"bridge.log"}')
+        raise RuntimeError(f'bridge did not publish expected version {expected_version} within 25 seconds; see {STATE_DIR/"bridge.log"}')
+    return True
 
-def install(z: Path) -> None:
+def install(z: Path, *, recovery: bool = False) -> str:
     global CURRENT_STAGE
     v=version_of_zip(z)
     version_text='.'.join(map(str,v)) if v else 'unknown'
     CURRENT_STAGE='approval'
-    if not desktop_approval(version_text, z.name):
+    approval=True if recovery else desktop_approval(version_text, z.name)
+    if approval is None:
+        return 'deferred'
+    if approval is False:
         log(f'Update {version_text} was not approved; leaving current version running.')
-        return
+        return 'declined'
     with tempfile.TemporaryDirectory(prefix='hol-update-') as td:
         CURRENT_STAGE='validate ZIP'
         root=safe_extract(z,Path(td))
@@ -160,9 +183,13 @@ def install(z: Path) -> None:
         CURRENT_STAGE='install Chrome extension'
         run_sh(TARGET/'install-extension-to-home.sh',cwd=TARGET)
         CURRENT_STAGE='start and verify bridge'
-        start_bridge(manifest['version'])
+        started=start_bridge(manifest['version'])
         CURRENT_STAGE='complete'
-        log(f'Installed and verified version {manifest["version"]} from {z.name}')
+        if started:
+            log(f'Installed and verified version {manifest["version"]} from {z.name}')
+        else:
+            log(f'Installed version {manifest["version"]} from {z.name}; GUI start is pending graphical login.')
+        return 'installed'
 
 
 def count_entries_capped(root: Path, cap: int) -> int:
@@ -289,13 +316,45 @@ def tmp_safety_check() -> None:
     except Exception as exc:
         log('PF2F5QTT safety check failed: '+repr(exc))
 
-def restore_if_missing() -> None:
+def newest_local_zip() -> tuple[tuple[int,int,int],Path] | None:
+    candidates=[]
+    for p in DOWNLOADS.glob('hol-family-source-diagnostic-v*.zip'):
+        try:
+            v=version_of_zip(p)
+            if v and p.stat().st_size>0:
+                candidates.append((v,p))
+        except OSError:
+            continue
+    return max(candidates,key=lambda item:item[0]) if candidates else None
+
+def restore_if_missing() -> bool:
     if TARGET.exists():
-        return
-    log('Project missing after restart; restoring the last GitHub version.')
+        return True
+    if (PERSISTENT_CACHE/'chrome-extension/manifest.json').is_file() and (PERSISTENT_CACHE/'378876.txt').is_file():
+        log(f'Project missing after restart; restoring from persistent cache {PERSISTENT_CACHE}.')
+        TARGET.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(PERSISTENT_CACHE, TARGET, symlinks=True)
+        for script in TARGET.glob('*.sh'):
+            script.chmod(script.stat().st_mode | 0o111)
+        subprocess.run(['python3','-m','py_compile',str(TARGET/'hol-reddit-ollama-bridge.py')],check=True)
+        run_sh(TARGET/'install-extension-to-home.sh',cwd=TARGET)
+        manifest=json.loads((TARGET/'chrome-extension/manifest.json').read_text())
+        start_bridge(manifest.get('version'))
+        return True
+    local=newest_local_zip()
+    if local:
+        version,path=local
+        log(f'Project missing after restart; restoring from local Downloads ZIP {path.name}.')
+        try:
+            result=install(path,recovery=True)
+            return result == 'installed' and TARGET.exists()
+        except Exception as exc:
+            log('LOCAL ZIP RESTORE FAILED: '+repr(exc))
+    log('Project missing after restart; trying the last GitHub version.')
     TARGET.parent.mkdir(parents=True, exist_ok=True)
-    cp=subprocess.run(['git','clone','https://github.com/we6jbo/hol-family-source-diagnostic.git',str(TARGET)],capture_output=True,text=True)
+    cp=subprocess.run(['git','clone','https://github.com/we6jbo/hol-family-source-diagnostic.git',str(TARGET)],capture_output=True,text=True,timeout=120)
     if cp.returncode != 0:
+        shutil.rmtree(TARGET,ignore_errors=True)
         raise RuntimeError('GitHub restore failed: '+cp.stderr.strip())
     subprocess.run(['python3','-m','py_compile',str(TARGET/'hol-reddit-ollama-bridge.py')],check=True)
     for script in TARGET.glob('*.sh'):
@@ -303,36 +362,77 @@ def restore_if_missing() -> None:
     run_sh(TARGET/'install-extension-to-home.sh',cwd=TARGET)
     manifest=json.loads((TARGET/'chrome-extension/manifest.json').read_text())
     start_bridge(manifest.get('version'))
+    return True
+
+def start_pending_gui_if_possible() -> None:
+    if not TARGET.exists() or not graphical_environment_ready():
+        return
+    marker=Path('/tmp/thecurversionofthisis.json')
+    expected='.'.join(map(str,current_version()))
+    try:
+        data=json.loads(marker.read_text(encoding='utf-8'))
+        pid=int(data.get('pid',0))
+        if data.get('version') == expected and pid>0:
+            os.kill(pid,0)
+            PENDING_GUI_FILE.unlink(missing_ok=True)
+            return
+    except Exception:
+        pass
+    stop_bridge()
+    start_bridge(expected)
 
 
 def main():
     STATE_DIR.mkdir(parents=True,exist_ok=True)
-    try:
-        restore_if_missing()
-    except Exception as e:
-        log('STARTUP RESTORE FAILED: '+repr(e))
-    seen=set()
+    seen_success=set()
+    declined_until={}
+    last_restore_attempt=0.0
+    last_gui_attempt=0.0
     tmp_safety_check()
     last_safety=time.monotonic()
     log('Updater identity: '+identity_summary())
+    log('Graphical environment: DISPLAY='+repr(os.environ.get('DISPLAY'))+' WAYLAND_DISPLAY='+repr(os.environ.get('WAYLAND_DISPLAY')))
     log('Optional confirmation mode: '+('enabled' if APPROVAL_FILE.exists() else 'disabled')+f' ({APPROVAL_FILE})')
     log('Watching '+str(DOWNLOADS)+' for HOL version ZIP files.')
     while True:
-        if time.monotonic()-last_safety >= SAFETY_INTERVAL_SECONDS:
-            tmp_safety_check()
-            last_safety=time.monotonic()
+        now=time.monotonic()
+        if not TARGET.exists() and now-last_restore_attempt >= RESTORE_RETRY_SECONDS:
+            last_restore_attempt=now
+            try:
+                restore_if_missing()
+            except Exception as e:
+                log('STARTUP RESTORE DEFERRED: '+repr(e))
+        if TARGET.exists() and now-last_gui_attempt >= GUI_RETRY_SECONDS:
+            last_gui_attempt=now
+            try:
+                start_pending_gui_if_possible()
+            except Exception as e:
+                log('GUI START RETRY FAILED: '+repr(e))
+        if now-last_safety >= SAFETY_INTERVAL_SECONDS:
+            tmp_safety_check(); last_safety=now
         candidates=[]
         for p in DOWNLOADS.glob('hol-family-source-diagnostic-v*.zip'):
-            v=version_of_zip(p)
-            if v and p.stat().st_size>0: candidates.append((v,p))
+            try:
+                v=version_of_zip(p)
+                if v and p.stat().st_size>0: candidates.append((v,p))
+            except OSError:
+                continue
         for v,p in sorted(candidates):
             key=(str(p),p.stat().st_mtime_ns,p.stat().st_size)
-            if key in seen: continue
-            seen.add(key)
+            if key in seen_success or time.time() < declined_until.get(key,0):
+                continue
             if v>current_version():
-                try: install(p)
+                try:
+                    result=install(p)
+                    if result == 'installed':
+                        seen_success.add(key)
+                    elif result == 'declined':
+                        declined_until[key]=time.time()+600
+                    # deferred is intentionally not marked seen; retry after GUI import
                 except Exception as e:
                     log(f'UPDATE FAILED during stage={CURRENT_STAGE}: {type(e).__name__}: {e}')
                     log(traceback.format_exc().rstrip())
+            else:
+                seen_success.add(key)
         time.sleep(5)
 if __name__=='__main__': main()

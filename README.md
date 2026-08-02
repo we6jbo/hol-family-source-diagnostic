@@ -538,3 +538,14 @@ The Main tab now recommends which HOL software version to use, not which interfa
 ## Version 1.4.0 resilient marker synchronization
 
 The isolated `jul3126-proc.txt` process no longer pushes from the active checkout. It clones the newest GitHub `main` branch into a disposable temporary directory, creates or updates only the marker, commits it there, and pushes `HEAD:main`. If the remote changes during the operation, it fetches and rebases only the disposable clone before retrying. The active project may remain ahead, behind, dirty, or contain uncommitted work without being modified by this marker process. No force push is used. Authentication, connectivity, or GitHub outages remain visible in the conditional Troubleshoot GitHub tab and are retried every ten minutes.
+
+
+## Version 1.4.1 reboot and graphical-session recovery
+
+Version 1.4.1 separates headless recovery from graphical startup. The user service may run before the desktop has a usable `DISPLAY`, so it restores the source and extension first and defers the Tkinter window. At graphical login, `~/.config/autostart/hol-family-source-session.desktop` runs the persistent helper under `~/.local/lib/hol-family-source-diagnostic/`, imports the graphical environment into systemd, restarts the updater, and starts HOL only if no current bridge process is alive.
+
+When `/tmp/to-github/hol-family-source-diagnostic` is missing, the updater first validates and installs the newest HOL ZIP in `~/Downloads`. If no usable ZIP is available, it retries the GitHub clone every 60 seconds until DNS and network access work. A Zenity approval that cannot open because no display exists is treated as deferred, not denied.
+
+## Version 1.4.2 persistent recovery cache
+
+Version 1.4.2 stores a private recovery copy at `~/.local/share/hol-family-source-diagnostic/recovery-project`. After `/tmp` is cleared, the graphical-login helper restores this copy before attempting a Downloads ZIP or GitHub. This avoids dependence on DNS during early boot and ensures Tkinter starts only from a graphical session that has a valid display environment.
