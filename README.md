@@ -549,3 +549,8 @@ When `/tmp/to-github/hol-family-source-diagnostic` is missing, the updater first
 ## Version 1.4.2 persistent recovery cache
 
 Version 1.4.2 stores a private recovery copy at `~/.local/share/hol-family-source-diagnostic/recovery-project`. After `/tmp` is cleared, the graphical-login helper restores this copy before attempting a Downloads ZIP or GitHub. This avoids dependence on DNS during early boot and ensures Tkinter starts only from a graphical session that has a valid display environment.
+
+
+## Version 1.4.3 ARTIF controls
+
+Config - Advanced includes LEARN ARTIF, RUN ARTIF, Ask Google AI to update ARTIF, and LOCK ARTIF. HOL searches the canonical project root before `/home/fcai3abc`. One minute after startup it runs ARTIF when `autorun-artif.txt` exists, otherwise it runs LEARN-ARTIF. Pressing a running process button stops that process. `INTEL.json` is monitored without being uploaded automatically. LOCK ARTIF creates `CS5lJbIvW.txt`, refuses obvious credential filenames, commits and rebases without force pushing, verifies the raw GitHub marker, and opens `sudo chatgpt-share-readonly` in a terminal.

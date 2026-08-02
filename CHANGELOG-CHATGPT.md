@@ -1,3 +1,12 @@
+# Version 1.4.3
+
+- Added LEARN ARTIF and RUN ARTIF toggle buttons to Config - Advanced.
+- Added one-minute automatic selection controlled by `autorun-artif.txt`.
+- Added monitoring for `/home/fcai3abc/INTEL.json`.
+- Added a Google AI ARTIF development workspace and clipboard prompt.
+- Added LOCK ARTIF with safe Git staging, fetch/rebase/push, raw marker verification, and visible `chatgpt-share-readonly` launch.
+- Preserved the persistent recovery behavior from version 1.4.2.
+
 # Version 1.4.2
 
 - Added a persistent recovery copy under `~/.local/share/hol-family-source-diagnostic/recovery-project`.

@@ -26,6 +26,7 @@ import random
 import queue
 import secrets
 import shutil
+import shlex
 import socket
 import ssl
 import subprocess
@@ -54,7 +55,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -71,6 +72,10 @@ GITHUB_139_MARKER_FILE = PROJECT_ROOT / "jul3126-proc.txt"
 GITHUB_139_RAW_URL = "https://raw.githubusercontent.com/we6jbo/hol-family-source-diagnostic/refs/heads/main/jul3126-proc.txt"
 GITHUB_139_TARGET = dt.datetime(2026, 7, 21, 20, 30, tzinfo=LOCAL_TIMEZONE)
 GITHUB_139_RETRY_MS = 10 * 60 * 1000
+ARTIF_HOME = Path("/home/fcai3abc")
+ARTIF_AUTORUN_MARKER = PROJECT_ROOT / "autorun-artif.txt"
+ARTIF_LOCK_MARKER = PROJECT_ROOT / "CS5lJbIvW.txt"
+ARTIF_LOCK_RAW_URL = "https://raw.githubusercontent.com/we6jbo/hol-family-source-diagnostic/refs/heads/main/CS5lJbIvW.txt"
 GENEALOGY_RESEARCH_FACTS = {
     "subject": "Adaline A. Holderman",
     "birth": "24 Apr 1835, Marion County, Ohio, USA",
@@ -2329,6 +2334,8 @@ class App:
         self.troubleshoot_tab = None
         self.troubleshoot_text = None
         self.troubleshoot_share_text = None
+        self.artif_processes: dict[str, subprocess.Popen] = {}
+        self.artif_status_var = tk.StringVar(value="ARTIF controls are idle.")
 
         # Overall IRC experiment fallback. This is separate from the
         # shorter per-channel rotation timers.
@@ -2654,6 +2661,19 @@ class App:
         tk.Button(buttons, text="Open Reddit Workflow", command=self._open_reddit_fallback_window).pack(side="left")
         tk.Button(buttons, text="Check GitHub Sync", command=self.check_github_sync).pack(side="left", padx=8)
         tk.Button(buttons, text="Test GitHub Recovery", command=self.test_github_recovery).pack(side="left")
+        artif_frame = tk.LabelFrame(
+            self.advanced_tab,
+            text="ARTIF Development Controls",
+            padx=8,
+            pady=8,
+        )
+        artif_frame.pack(fill="x", padx=12, pady=(4, 6))
+        tk.Button(artif_frame, text="LEARN ARTIF", command=lambda: self.toggle_artif_process("LEARN-ARTIF"), background="#2E7D32", foreground="#FFFFFF", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=4)
+        tk.Button(artif_frame, text="RUN ARTIF", command=lambda: self.toggle_artif_process("ARTIF"), background="#1565C0", foreground="#FFFFFF", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=4)
+        tk.Button(artif_frame, text="Ask Google AI to update ARTIF", command=self.open_artif_google_ai_workspace).pack(side="left", padx=4)
+        tk.Button(artif_frame, text="LOCK ARTIF", command=self.lock_artif, background="#7B1FA2", foreground="#FFFFFF", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=4)
+        tk.Label(self.advanced_tab, textvariable=self.artif_status_var, anchor="w", justify="left", wraplength=1050).pack(fill="x", padx=18, pady=(0, 6))
+
         tk.Button(
             buttons,
             text="PROJECT READINESS CHECK",
@@ -2681,6 +2701,8 @@ class App:
         self.root.after(1_000, self._scheduled_automation_tick)
         self.root.after(500, self._drain_github_139_ui_queue)
         self.root.after(2_000, self._start_github_139_process)
+        self.root.after(60_000, self._autorun_artif_after_delay)
+        self.root.after(5_000, self._monitor_artif_intel)
 
         try:
             self.server = start_server(self.state)
@@ -3033,7 +3055,7 @@ class App:
         by the active checkout being both ahead of and behind origin/main.
         """
         lines = [
-            "HOL 1.4.2 RESILIENT ISOLATED GITHUB MARKER PROCESS",
+            "HOL 1.4.3 RESILIENT ISOLATED GITHUB MARKER PROCESS",
             f"Current time: {dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat()}",
             f"Original requested target: {GITHUB_139_TARGET.isoformat()}",
             f"Active project root: {PROJECT_ROOT}",
@@ -3064,7 +3086,7 @@ class App:
 
             marker_text = (
                 "HOL isolated scheduled GitHub process marker\n"
-                "Created by HOL 1.4.2 using a disposable clean clone.\n"
+                "Created by HOL 1.4.3 using a disposable clean clone.\n"
                 "Purpose: confirm that the isolated marker reached GitHub without altering the active working tree.\n"
                 "This file contains no passwords, tokens, email addresses, IP addresses, or private genealogy details.\n"
             )
@@ -3154,7 +3176,7 @@ class App:
             holder.pack(fill="both", expand=True)
             tk.Label(
                 holder,
-                text="HOL 1.4.2 Resilient GitHub Marker Diagnostics",
+                text="HOL 1.4.3 Resilient GitHub Marker Diagnostics",
                 font=("TkDefaultFont", 15, "bold"),
             ).pack(anchor="w")
             self.troubleshoot_text = scrolledtext.ScrolledText(holder, height=18, wrap="word")
@@ -3205,6 +3227,8 @@ class App:
             self.troubleshoot_tab = None
             self.troubleshoot_text = None
             self.troubleshoot_share_text = None
+        self.artif_processes: dict[str, subprocess.Popen] = {}
+        self.artif_status_var = tk.StringVar(value="ARTIF controls are idle.")
         if hasattr(self, "recommended_tab_combo"):
             self.recommended_tab_combo.configure(values=("Main", "Config", "Config - Advanced"))
 
@@ -4254,6 +4278,189 @@ class App:
         self.status(
             f"No newer version was detected. This running bridge is version {APP_VERSION}."
         )
+
+    def _resolve_artif_target(self, name: str) -> Path | None:
+        for candidate in (PROJECT_ROOT / name, ARTIF_HOME / name):
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _artif_command(self, target: Path) -> tuple[list[str], Path]:
+        if target.is_dir():
+            choices = [target / "run.sh", target / target.name, target / "main.py", target / "app.py"]
+            executable = next((item for item in choices if item.exists()), None)
+            if executable is None:
+                raise RuntimeError(f"No runnable entry point was found inside {target}.")
+            target = executable
+        cwd = target.parent
+        if target.suffix == ".py":
+            return ([sys.executable, str(target)], cwd)
+        if target.suffix == ".sh":
+            return (["/bin/sh", str(target)], cwd)
+        if os.access(target, os.X_OK):
+            return ([str(target)], cwd)
+        raise RuntimeError(f"{target} exists but is not executable and is not a Python or shell file.")
+
+    def toggle_artif_process(self, name: str) -> None:
+        process = self.artif_processes.get(name)
+        if process and process.poll() is None:
+            try:
+                os.killpg(process.pid, 15)
+            except Exception:
+                process.terminate()
+            self.artif_status_var.set(f"Stopped {name} (PID {process.pid}).")
+            self.artif_processes.pop(name, None)
+            return
+        target = self._resolve_artif_target(name)
+        if target is None:
+            messagebox.showwarning(f"{name} not found", f"HOL checked {PROJECT_ROOT / name} and {ARTIF_HOME / name}, but neither exists.")
+            self.artif_status_var.set(f"Could not start {name}: executable not found.")
+            return
+        try:
+            command, cwd = self._artif_command(target)
+            log_dir = Path.home() / ".local" / "state" / "hol-family-source-diagnostic"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / f"{name.lower()}-artif.log"
+            log_handle = log_path.open("ab", buffering=0)
+            process = subprocess.Popen(command, cwd=str(cwd), stdout=log_handle, stderr=subprocess.STDOUT, start_new_session=True)
+            self.artif_processes[name] = process
+            self.artif_status_var.set(f"Started {name} from {target} as PID {process.pid}. Log: {log_path}")
+        except Exception as exc:
+            self.artif_status_var.set(f"Could not start {name}: {type(exc).__name__}: {exc}")
+            messagebox.showerror(f"Could not start {name}", str(exc))
+
+    def _autorun_artif_after_delay(self) -> None:
+        selected = "ARTIF" if ARTIF_AUTORUN_MARKER.exists() else "LEARN-ARTIF"
+        other = "LEARN-ARTIF" if selected == "ARTIF" else "ARTIF"
+        other_process = self.artif_processes.get(other)
+        if other_process and other_process.poll() is None:
+            self.artif_status_var.set(f"Automatic {selected} start skipped because {other} is already running.")
+            return
+        selected_process = self.artif_processes.get(selected)
+        if selected_process and selected_process.poll() is None:
+            return
+        self.toggle_artif_process(selected)
+
+    def _monitor_artif_intel(self) -> None:
+        intel = ARTIF_HOME / "INTEL.json"
+        details = []
+        if intel.exists():
+            try:
+                stat = intel.stat()
+                stamp = dt.datetime.fromtimestamp(stat.st_mtime, LOCAL_TIMEZONE).isoformat()
+                details.append(f"INTEL.json: {stat.st_size} bytes, updated {stamp}")
+            except OSError:
+                details.append("INTEL.json exists but could not be inspected")
+        for name, process in list(self.artif_processes.items()):
+            code = process.poll()
+            if code is not None:
+                self.artif_processes.pop(name, None)
+                details.append(f"{name} exited with status {code}")
+        if details:
+            self.artif_status_var.set(" | ".join(details))
+        self.root.after(5_000, self._monitor_artif_intel)
+
+    def _terminal_command(self, shell_command: str) -> list[str] | None:
+        candidates = [
+            ["x-terminal-emulator", "-e", "bash", "-lc", shell_command],
+            ["gnome-terminal", "--", "bash", "-lc", shell_command],
+            ["xfce4-terminal", "--command", f"bash -lc {shlex.quote(shell_command)}"],
+            ["konsole", "-e", "bash", "-lc", shell_command],
+        ]
+        return next((command for command in candidates if shutil.which(command[0])), None)
+
+    def open_artif_google_ai_workspace(self) -> None:
+        ARTIF_HOME.mkdir(parents=True, exist_ok=True)
+        prompt_path = ARTIF_HOME / "ASK-GOOGLE-AI-TO-UPDATE-ARTIF.txt"
+        prompt = f"""Hi Google AI,
+
+Help Mr Jeremiah O'Neal create the next safe version of ARTIF in {ARTIF_HOME}.
+
+HOL version {APP_VERSION} provides these controls:
+
+LEARN ARTIF: Finds LEARN-ARTIF first in {PROJECT_ROOT}, then in {ARTIF_HOME}. Pressing the button starts it; pressing it again stops it. One minute after HOL starts, LEARN-ARTIF starts automatically when {ARTIF_AUTORUN_MARKER} does not exist. LEARN-ARTIF writes {ARTIF_HOME / 'INTEL.json'}.
+
+RUN ARTIF: Finds ARTIF in the same two locations. Pressing the button starts it; pressing it again stops it. One minute after HOL starts, ARTIF starts automatically when {ARTIF_AUTORUN_MARKER} exists.
+
+Ask Google AI to update ARTIF: Opens this development workspace and provides these instructions so Google AI can review INTEL.json and help create another ARTIF version.
+
+LOCK ARTIF: Creates {ARTIF_LOCK_MARKER.name}, commits the project without intentionally adding credentials, pushes it, verifies {ARTIF_LOCK_RAW_URL}, then opens sudo chatgpt-share-readonly in a visible terminal and reports that ARTIF is locked.
+
+Please inspect INTEL.json and the ARTIF project files before recommending or changing code. Preserve existing behavior unless Jeremiah asks for a change. Do not place passwords, tokens, verification codes, private keys, or other credentials in GitHub.
+"""
+        prompt_path.write_text(prompt, encoding="utf-8")
+        shell_command = f"cd {shlex.quote(str(ARTIF_HOME))}; printf '\nARTIF Google AI development prompt:\n\n'; cat {shlex.quote(str(prompt_path))}; printf '\n\nThe prompt has also been copied to the clipboard.\n'; exec bash"
+        command = self._terminal_command(shell_command)
+        if command is None:
+            messagebox.showerror("Terminal unavailable", f"No supported terminal was found. Prompt saved at {prompt_path}.")
+            return
+        subprocess.Popen(command, start_new_session=True)
+        try:
+            self.root.clipboard_clear(); self.root.clipboard_append(prompt); self.root.update()
+        except Exception:
+            pass
+        self.artif_status_var.set(f"Opened ARTIF development workspace. Prompt copied and saved at {prompt_path}.")
+
+    def lock_artif(self) -> None:
+        if messagebox.askyesno("Lock ARTIF", "Create the ARTIF lock marker, commit safe project content, push GitHub, verify the raw marker, and run sudo chatgpt-share-readonly?"):
+            threading.Thread(target=self._lock_artif_worker, daemon=True).start()
+
+    def _lock_artif_worker(self) -> None:
+        diagnostics = []
+        try:
+            ARTIF_LOCK_MARKER.write_text(f"ARTIF locked by HOL {APP_VERSION} at {dt.datetime.now(LOCAL_TIMEZONE).isoformat()}\n", encoding="utf-8")
+            if not (PROJECT_ROOT / ".git").exists():
+                raise RuntimeError(f"{PROJECT_ROOT} is not a Git working tree.")
+            suspicious = []
+            for path in PROJECT_ROOT.rglob("*"):
+                if not path.is_file() or ".git" in path.parts:
+                    continue
+                low = path.name.lower()
+                if any(token in low for token in ("password", "passwd", "secret", "credential", "private-key", "id_rsa")):
+                    if path.name != "token439873.touch":
+                        suspicious.append(str(path.relative_to(PROJECT_ROOT)))
+            if suspicious:
+                raise RuntimeError("Lock stopped because possible credential files were found: " + ", ".join(suspicious[:12]))
+            def run(command: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
+                result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, timeout=timeout)
+                diagnostics.append(f"$ {' '.join(command)}\nreturncode={result.returncode}\n{result.stdout}{result.stderr}")
+                return result
+            if run(["git", "add", "-A"]).returncode != 0:
+                raise RuntimeError("git add failed")
+            staged = run(["git", "diff", "--cached", "--quiet"])
+            if staged.returncode == 1 and run(["git", "commit", "-m", f"Lock ARTIF from HOL {APP_VERSION}"]).returncode != 0:
+                raise RuntimeError("git commit failed")
+            if staged.returncode not in (0, 1):
+                raise RuntimeError("could not inspect staged changes")
+            if run(["git", "fetch", "origin", "main"]).returncode != 0:
+                raise RuntimeError("git fetch failed")
+            if run(["git", "rebase", "origin/main"]).returncode != 0:
+                run(["git", "rebase", "--abort"])
+                raise RuntimeError("git rebase failed; active project was restored to its pre-rebase state")
+            if run(["git", "push", "origin", "main"]).returncode != 0:
+                raise RuntimeError("git push failed")
+            request = Request(ARTIF_LOCK_RAW_URL, headers={"User-Agent": f"HOL/{APP_VERSION}"})
+            verified = False
+            for _ in range(6):
+                try:
+                    with urlopen(request, timeout=20) as response:
+                        verified = response.status == 200
+                    if verified: break
+                except Exception as exc:
+                    diagnostics.append(f"Raw marker check: {type(exc).__name__}: {exc}")
+                time.sleep(10)
+            if not verified:
+                raise RuntimeError("GitHub push succeeded, but the raw lock marker was not confirmed yet.")
+            terminal = self._terminal_command("sudo chatgpt-share-readonly; printf '\nPress Enter to close.\n'; read -r")
+            if terminal is None:
+                raise RuntimeError("ARTIF was verified, but no supported terminal was available for sudo chatgpt-share-readonly.")
+            subprocess.Popen(terminal, start_new_session=True)
+            self.root.after(0, lambda: messagebox.showinfo("ARTIF locked", "ARTIF has been locked and the GitHub marker was verified."))
+            self.root.after(0, lambda: self.artif_status_var.set("ARTIF locked. GitHub marker verified; chatgpt-share-readonly opened."))
+        except Exception as exc:
+            report = "\n\n".join(diagnostics)
+            self.root.after(0, lambda e=exc, r=report: messagebox.showerror("LOCK ARTIF failed", f"{type(e).__name__}: {e}\n\n{r[-5000:]}"))
+            self.root.after(0, lambda e=exc: self.artif_status_var.set(f"LOCK ARTIF failed: {type(e).__name__}: {e}"))
 
     def close(self) -> None:
         try:
