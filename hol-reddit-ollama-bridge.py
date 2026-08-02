@@ -55,7 +55,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.4.4"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -2361,8 +2361,12 @@ class App:
         self.advanced_tab = tk.Frame(self.notebook)
         self.notebook.add(self.advanced_tab, text="Config - Advanced")
 
+        self.artif_tab = tk.Frame(self.notebook)
+        self.notebook.add(self.artif_tab, text="ARTIF")
+
         self._build_main_tab()
         self._build_config_tab()
+        self._build_artif_tab()
         theme_frame = tk.Frame(self.advanced_tab)
         theme_frame.pack(fill="x", padx=12, pady=(10, 0))
 
@@ -2661,19 +2665,6 @@ class App:
         tk.Button(buttons, text="Open Reddit Workflow", command=self._open_reddit_fallback_window).pack(side="left")
         tk.Button(buttons, text="Check GitHub Sync", command=self.check_github_sync).pack(side="left", padx=8)
         tk.Button(buttons, text="Test GitHub Recovery", command=self.test_github_recovery).pack(side="left")
-        artif_frame = tk.LabelFrame(
-            self.advanced_tab,
-            text="ARTIF Development Controls",
-            padx=8,
-            pady=8,
-        )
-        artif_frame.pack(fill="x", padx=12, pady=(4, 6))
-        tk.Button(artif_frame, text="LEARN ARTIF", command=lambda: self.toggle_artif_process("LEARN-ARTIF"), background="#2E7D32", foreground="#FFFFFF", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=4)
-        tk.Button(artif_frame, text="RUN ARTIF", command=lambda: self.toggle_artif_process("ARTIF"), background="#1565C0", foreground="#FFFFFF", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=4)
-        tk.Button(artif_frame, text="Ask Google AI to update ARTIF", command=self.open_artif_google_ai_workspace).pack(side="left", padx=4)
-        tk.Button(artif_frame, text="LOCK ARTIF", command=self.lock_artif, background="#7B1FA2", foreground="#FFFFFF", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=4)
-        tk.Label(self.advanced_tab, textvariable=self.artif_status_var, anchor="w", justify="left", wraplength=1050).pack(fill="x", padx=18, pady=(0, 6))
-
         tk.Button(
             buttons,
             text="PROJECT READINESS CHECK",
@@ -2788,6 +2779,68 @@ class App:
         self._save_current_tab_snapshot(silent=True)
         self._show_visual_version()
 
+    def _build_artif_tab(self) -> None:
+        """Build the dedicated ARTIF workspace without crowding advanced controls."""
+        holder = tk.Frame(self.artif_tab, padx=18, pady=18)
+        holder.pack(fill="both", expand=True)
+
+        tk.Label(
+            holder,
+            text="ARTIF Development",
+            font=("TkDefaultFont", 18, "bold"),
+            anchor="w",
+        ).pack(fill="x")
+        tk.Label(
+            holder,
+            text=(
+                "Run, train, update, or lock ARTIF here. The automatic one-minute "
+                "selection between LEARN-ARTIF and ARTIF remains unchanged."
+            ),
+            anchor="w",
+            justify="left",
+            wraplength=1000,
+        ).pack(fill="x", pady=(6, 14))
+
+        controls = tk.LabelFrame(holder, text="ARTIF Controls", padx=12, pady=12)
+        controls.pack(fill="x")
+        tk.Button(
+            controls, text="LEARN ARTIF",
+            command=lambda: self.toggle_artif_process("LEARN-ARTIF"),
+            background="#2E7D32", foreground="#FFFFFF",
+            font=("TkDefaultFont", 11, "bold"), padx=12, pady=7,
+        ).pack(side="left", padx=5)
+        tk.Button(
+            controls, text="RUN ARTIF",
+            command=lambda: self.toggle_artif_process("ARTIF"),
+            background="#1565C0", foreground="#FFFFFF",
+            font=("TkDefaultFont", 11, "bold"), padx=12, pady=7,
+        ).pack(side="left", padx=5)
+        tk.Button(
+            controls, text="Ask Google AI to update ARTIF",
+            command=self.open_artif_google_ai_workspace, padx=12, pady=7,
+        ).pack(side="left", padx=5)
+        tk.Button(
+            controls, text="LOCK ARTIF", command=self.lock_artif,
+            background="#7B1FA2", foreground="#FFFFFF",
+            font=("TkDefaultFont", 11, "bold"), padx=12, pady=7,
+        ).pack(side="left", padx=5)
+
+        status_frame = tk.LabelFrame(holder, text="ARTIF Status", padx=12, pady=12)
+        status_frame.pack(fill="x", pady=(14, 0))
+        tk.Label(
+            status_frame, textvariable=self.artif_status_var, anchor="w",
+            justify="left", wraplength=1050,
+        ).pack(fill="x")
+
+        tk.Label(
+            holder,
+            text=(
+                "Search locations: the HOL project root first, then /home/fcai3abc. "
+                "LEARN-ARTIF monitors /home/fcai3abc/INTEL.json."
+            ),
+            anchor="w", justify="left", wraplength=1000,
+        ).pack(fill="x", pady=(14, 0))
+
     def _build_config_tab(self) -> None:
         """Build the intentionally reserved second tab."""
         holder = tk.Frame(self.config_tab, padx=24, pady=24)
@@ -2831,7 +2884,7 @@ class App:
         return {
             "version": APP_VERSION,
             "captured_at": dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat(),
-            "tabs": ["Main", "Config", "Config - Advanced"],
+            "tabs": ["Main", "Config", "Config - Advanced", "ARTIF"],
             "main": [
                 "Editable visual-version selector for 1.3.9 and later",
                 "Read-only visual description of the selected version",
@@ -2846,6 +2899,12 @@ class App:
                 "Reddit/Ollama bridge configuration",
                 "GitHub, updater, recovery, and readiness controls",
                 "Status and diagnostic output",
+            ],
+            "artif": [
+                "LEARN ARTIF and RUN ARTIF process controls",
+                "Google AI ARTIF development handoff",
+                "LOCK ARTIF GitHub marker workflow",
+                "ARTIF and INTEL.json status",
             ],
             "conditional_tab": "Troubleshoot GitHub appears only while jul3126-proc.txt is not confirmed on GitHub.",
         }
@@ -2894,7 +2953,7 @@ class App:
         if snapshot is None:
             c.create_text(22, 62, anchor="nw", text="No saved visual snapshot for this future version.", font=("TkDefaultFont", 11))
             return
-        tabs = snapshot.get("tabs", ["Main", "Config", "Config - Advanced"])
+        tabs = snapshot.get("tabs", ["Main", "Config", "Config - Advanced", "ARTIF"])
         x = 22
         for index, name in enumerate(tabs):
             tab_width = max(105, 14 * len(name))
@@ -2902,15 +2961,16 @@ class App:
             c.create_text(x + tab_width / 2, 63, text=name, fill="#FFF4A3" if index == 0 else "#E2E8F0", font=("TkDefaultFont", 9, "bold"))
             x += tab_width + 5
         sections = [
-            ("Main: visual history + recommendation", 22, 96, 285),
-            ("Config: intentionally reserved", 315, 96, 545),
-            ("Advanced: IRC, Reddit, Ollama, GitHub", 575, 96, width - 22),
+            ("Main: visual history + recommendation", 22, 96, 250),
+            ("Config: intentionally reserved", 270, 96, 470),
+            ("Advanced: IRC, Reddit, Ollama, GitHub", 490, 96, 760),
+            ("ARTIF: run, learn, update, lock", 780, 96, width - 22),
         ]
         for label, x1, y1, x2 in sections:
             c.create_rectangle(x1, y1, x2, 155, outline="#60A5FA", width=2)
             c.create_text((x1 + x2) / 2, 125, text=label, width=max(100, x2-x1-12), justify="center")
         if snapshot.get("conditional_tab"):
-            c.create_text(22, 166, anchor="w", text="Conditional fourth tab: Troubleshoot GitHub", font=("TkDefaultFont", 9, "italic"))
+            c.create_text(22, 166, anchor="w", text="Conditional troubleshooting tab: Troubleshoot GitHub", font=("TkDefaultFont", 9, "italic"))
 
     def _load_tab_intelligence(self) -> dict:
         try:
@@ -3055,7 +3115,7 @@ class App:
         by the active checkout being both ahead of and behind origin/main.
         """
         lines = [
-            "HOL 1.4.3 RESILIENT ISOLATED GITHUB MARKER PROCESS",
+            "HOL 1.4.4 RESILIENT ISOLATED GITHUB MARKER PROCESS",
             f"Current time: {dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat()}",
             f"Original requested target: {GITHUB_139_TARGET.isoformat()}",
             f"Active project root: {PROJECT_ROOT}",
@@ -3086,7 +3146,7 @@ class App:
 
             marker_text = (
                 "HOL isolated scheduled GitHub process marker\n"
-                "Created by HOL 1.4.3 using a disposable clean clone.\n"
+                "Created by HOL 1.4.4 using a disposable clean clone.\n"
                 "Purpose: confirm that the isolated marker reached GitHub without altering the active working tree.\n"
                 "This file contains no passwords, tokens, email addresses, IP addresses, or private genealogy details.\n"
             )
@@ -3176,7 +3236,7 @@ class App:
             holder.pack(fill="both", expand=True)
             tk.Label(
                 holder,
-                text="HOL 1.4.3 Resilient GitHub Marker Diagnostics",
+                text="HOL 1.4.4 Resilient GitHub Marker Diagnostics",
                 font=("TkDefaultFont", 15, "bold"),
             ).pack(anchor="w")
             self.troubleshoot_text = scrolledtext.ScrolledText(holder, height=18, wrap="word")
@@ -3230,7 +3290,7 @@ class App:
         self.artif_processes: dict[str, subprocess.Popen] = {}
         self.artif_status_var = tk.StringVar(value="ARTIF controls are idle.")
         if hasattr(self, "recommended_tab_combo"):
-            self.recommended_tab_combo.configure(values=("Main", "Config", "Config - Advanced"))
+            self.recommended_tab_combo.configure(values=("Main", "Config", "Config - Advanced", "ARTIF"))
 
     def _update_clock(self) -> None:
         """Display a live 12-hour Pacific clock and refresh it every second."""

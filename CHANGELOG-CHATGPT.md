@@ -1,3 +1,10 @@
+# Version 1.4.4
+
+- Added a dedicated fourth permanent tab named `ARTIF`.
+- Moved LEARN ARTIF, RUN ARTIF, Ask Google AI to update ARTIF, LOCK ARTIF, and ARTIF status out of Config - Advanced.
+- Preserved all ARTIF process, autorun, INTEL.json monitoring, and lock behavior.
+- Updated the tab visual-history snapshot for the new layout.
+
 # Version 1.4.3
 
 - Added LEARN ARTIF and RUN ARTIF toggle buttons to Config - Advanced.

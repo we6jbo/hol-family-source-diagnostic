@@ -1,5 +1,5 @@
 # HOL Family Source Diagnostic next-version notes
 
-## Current release: 1.4.3
+## Current release: 1.4.4
 
-Version 1.4.3 adds supervised ARTIF development controls while preserving persistent recovery after `/tmp` is cleared. Future releases should keep ARTIF execution local, keep secrets out of Git, and retain the graphical-login recovery cache.
+Version 1.4.4 moves all ARTIF controls and status information into a dedicated ARTIF tab so Config - Advanced remains visible at normal screen sizes. The one-minute ARTIF/LEARN-ARTIF autorun logic is unchanged.
