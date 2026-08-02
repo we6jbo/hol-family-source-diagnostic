@@ -1,3 +1,10 @@
+# Version 1.4.6
+
+- Added persistent `/home/fcai3abc/prompt-for-googleai.txt`; HOL creates it only when missing and preserves user or Google AI edits thereafter.
+- Added `/home/fcai3abc/memory-for-googleai.json` for non-secret persistent development memory.
+- The Google AI workspace button now reads and appends the current memory JSON to the clipboard handoff every time.
+- Prompt instructions allow Google AI, ARTIF, LEARN-ARTIF, and their generated Python or shell components to update memory atomically.
+
 # Version 1.4.5
 
 - Isolated all ARTIF and LEARN-ARTIF lookup, runtime, configuration, diagnostics, logs, state, autorun marker, and lock operations under `/home/fcai3abc`.

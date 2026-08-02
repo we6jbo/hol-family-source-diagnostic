@@ -572,3 +572,8 @@ Version 1.4.4 moves the full ARTIF development workspace into its own permanent 
 ## Version 1.4.3 ARTIF controls
 
 Version 1.4.3 originally added LEARN ARTIF, RUN ARTIF, Ask Google AI to update ARTIF, and LOCK ARTIF. Later releases moved these controls to the ARTIF tab and replaced the original fallback lookup behavior with the isolated `/home/fcai3abc` architecture documented above.
+
+
+## Version 1.4.6 Google AI prompt and memory
+
+The ARTIF workspace uses `/home/fcai3abc/prompt-for-googleai.txt`. HOL creates the default prompt only when the file is absent. Existing contents are preserved and used as the base prompt. `/home/fcai3abc/memory-for-googleai.json` stores non-secret persistent development context. Each press of **Ask Google AI to update ARTIF** reads that JSON and adds it to the clipboard handoff. Google AI and generated ARTIF or LEARN-ARTIF Python and shell components may update the memory file using valid JSON and atomic writes. Credentials and other secrets must never be written there.

@@ -55,7 +55,7 @@ STATUS_FILE = APP_DIR / "github-upload-status.txt"
 COMMAND_FILE = APP_DIR / "chatgpt-updater-command.json"
 VERSION_MARKER_FILE = Path("/tmp/thecurversionofthisis.json")
 CANONICAL_MANIFEST_FILE = Path("/tmp/to-github/hol-family-source-diagnostic/chrome-extension/manifest.json")
-APP_VERSION = "1.4.5"
+APP_VERSION = "1.4.6"
 REQUEST_NEW_VERSION_URL_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "new-version-url.txt"
 THEME_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "theme.txt"
 AUTO_UPLOAD_STATE_FILE = Path.home() / ".config" / "hol-family-source-diagnostic" / "auto-github-upload.json"
@@ -77,6 +77,8 @@ ARTIF_AUTORUN_MARKER = ARTIF_HOME / "autorun-artif.txt"
 ARTIF_LOCK_MARKER = ARTIF_HOME / "CS5lJbIvW.txt"
 ARTIF_CONFIG_FILE = ARTIF_HOME / "BZNhWFne.json"
 ARTIF_INTEL_FILE = ARTIF_HOME / "INTEL.json"
+ARTIF_GOOGLE_PROMPT_FILE = ARTIF_HOME / "prompt-for-googleai.txt"
+ARTIF_GOOGLE_MEMORY_FILE = ARTIF_HOME / "memory-for-googleai.json"
 GENEALOGY_RESEARCH_FACTS = {
     "subject": "Adaline A. Holderman",
     "birth": "24 Apr 1835, Marion County, Ohio, USA",
@@ -3116,7 +3118,7 @@ class App:
         by the active checkout being both ahead of and behind origin/main.
         """
         lines = [
-            "HOL 1.4.5 RESILIENT ISOLATED GITHUB MARKER PROCESS",
+            "HOL 1.4.6 RESILIENT ISOLATED GITHUB MARKER PROCESS",
             f"Current time: {dt.datetime.now(tz=LOCAL_TIMEZONE).isoformat()}",
             f"Original requested target: {GITHUB_139_TARGET.isoformat()}",
             f"Active project root: {PROJECT_ROOT}",
@@ -3147,7 +3149,7 @@ class App:
 
             marker_text = (
                 "HOL isolated scheduled GitHub process marker\n"
-                "Created by HOL 1.4.5 using a disposable clean clone.\n"
+                "Created by HOL 1.4.6 using a disposable clean clone.\n"
                 "Purpose: confirm that the isolated marker reached GitHub without altering the active working tree.\n"
                 "This file contains no passwords, tokens, email addresses, IP addresses, or private genealogy details.\n"
             )
@@ -3237,7 +3239,7 @@ class App:
             holder.pack(fill="both", expand=True)
             tk.Label(
                 holder,
-                text="HOL 1.4.5 Resilient GitHub Marker Diagnostics",
+                text="HOL 1.4.6 Resilient GitHub Marker Diagnostics",
                 font=("TkDefaultFont", 15, "bold"),
             ).pack(anchor="w")
             self.troubleshoot_text = scrolledtext.ScrolledText(holder, height=18, wrap="word")
@@ -4444,16 +4446,25 @@ class App:
 
     def open_artif_google_ai_workspace(self) -> None:
         ARTIF_HOME.mkdir(parents=True, exist_ok=True)
-        prompt_path = ARTIF_HOME / "ASK-GOOGLE-AI-TO-UPDATE-ARTIF.txt"
-        prompt = f"""Hi Google AI,
+        prompt_path = ARTIF_GOOGLE_PROMPT_FILE
+        memory_path = ARTIF_GOOGLE_MEMORY_FILE
+
+        default_prompt = f"""Hi Google AI,
 
 Help Mr Jeremiah O'Neal create the next safe version of ARTIF inside the exclusive Debian workspace {ARTIF_HOME}.
 
 SYSTEM ALIGNMENT REQUIREMENTS
-- All ARTIF and LEARN-ARTIF reads, writes, execution, diagnostics, logs, state, configuration, and documentation must remain inside {ARTIF_HOME}.
+- All ARTIF and LEARN-ARTIF reads, writes, execution, diagnostics, logs, state, configuration, memory, and documentation must remain inside {ARTIF_HOME}.
 - Do not use any external project directory as a fallback location.
 - Every generated component must read or access {ARTIF_CONFIG_FILE}, preferably through {ARTIF_HOME / 'shared_config.py'}.
 - Execution initializes an interactive workspace experience where the user sees a visible GUI window popup or a dedicated tracking terminal window spawned instantly so they can visually audit runtime loops in real time.
+
+PERSISTENT GOOGLE AI MEMORY
+- You may write durable, non-secret development context to {memory_path} when information from this session may be needed in a later Google AI session.
+- ARTIF, LEARN-ARTIF, and other .py or .sh components you create may also update {memory_path} when they discover information Google AI will need later.
+- Keep this file valid JSON and use atomic writes. Preserve useful existing entries instead of replacing the whole file unnecessarily.
+- Do not store passwords, tokens, private keys, cookies, verification codes, or other credentials in this memory file.
+- The HOL button reads this file each time it opens the Google AI workspace and appends its current JSON content to the working prompt.
 
 LEARN ARTIF
 LEARN-ARTIF executes via {ARTIF_HOME / 'LEARN-ARTIF' / 'run.sh'} or main.py. On startup, it spawns a visible terminal console or visual GUI popup interface displaying the live observation loop, and atomically writes output findings to {ARTIF_INTEL_FILE}.
@@ -4464,25 +4475,57 @@ ARTIF executes via {ARTIF_HOME / 'ARTIF' / 'run.sh'} or main.py. On startup, it 
 HOL starts or stops this concrete routine. One minute after HOL starts, ARTIF is selected when {ARTIF_AUTORUN_MARKER} exists.
 
 ASK GOOGLE AI TO UPDATE ARTIF
-Review {ARTIF_INTEL_FILE}, {ARTIF_CONFIG_FILE}, shared_config.py, ARTIF, LEARN-ARTIF, tests, and README.md before proposing changes. Preserve existing useful work, back up files before substantial replacement, and validate all generated code.
+Review {ARTIF_INTEL_FILE}, {ARTIF_CONFIG_FILE}, {memory_path}, shared_config.py, ARTIF, LEARN-ARTIF, tests, and README.md before proposing changes. Preserve existing useful work, back up files before substantial replacement, and validate all generated code.
+This base prompt is stored at {prompt_path}. If it already exists, HOL must use its existing contents rather than overwrite it, so the user and Google AI can refine it over time.
 
 LOCK ARTIF
 The lock routine operates on the Git repository rooted at {ARTIF_HOME}, creates {ARTIF_LOCK_MARKER}, stages that ARTIF repository after screening suspicious credential filenames, fetches and rebases without force pushing, pushes its configured origin branch, verifies the corresponding raw GitHub marker when the origin is a supported GitHub repository, and then opens sudo chatgpt-share-readonly in a visible terminal.
 
-Do not place passwords, tokens, verification codes, private keys, authentication cookies, email addresses, or other sensitive information in GitHub, INTEL.json, BZNhWFne.json, logs, or generated prompts.
+Do not place passwords, tokens, verification codes, private keys, authentication cookies, email addresses, or other sensitive information in GitHub, INTEL.json, BZNhWFne.json, memory-for-googleai.json, logs, or generated prompts.
 """
-        prompt_path.write_text(prompt, encoding="utf-8")
-        shell_command = f"cd {shlex.quote(str(ARTIF_HOME))}; printf '\nARTIF Google AI development prompt:\n\n'; cat {shlex.quote(str(prompt_path))}; printf '\n\nThe prompt has also been copied to the clipboard.\n'; exec bash"
+        if not prompt_path.exists():
+            prompt_path.write_text(default_prompt, encoding="utf-8")
+        try:
+            base_prompt = prompt_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("Prompt unavailable", f"Could not read {prompt_path}: {exc}")
+            return
+
+        if not memory_path.exists():
+            initial_memory = {
+                "schema_version": 1,
+                "purpose": "Non-secret persistent development memory for Google AI, ARTIF, and LEARN-ARTIF.",
+                "entries": []
+            }
+            memory_path.write_text(json.dumps(initial_memory, indent=2) + "\n", encoding="utf-8")
+
+        memory_section = ""
+        try:
+            memory_data = json.loads(memory_path.read_text(encoding="utf-8"))
+            memory_text = json.dumps(memory_data, indent=2, ensure_ascii=False)
+            memory_section = (
+                "\n\nCURRENT CONTENTS OF memory-for-googleai.json\n"
+                "Use this as prior non-secret development context. Update the file atomically when useful.\n\n"
+                + memory_text + "\n"
+            )
+        except Exception as exc:
+            memory_section = (
+                f"\n\nMEMORY FILE WARNING\n{memory_path} could not be parsed as valid JSON: "
+                f"{type(exc).__name__}: {exc}\nRepair it without discarding recoverable information.\n"
+            )
+
+        working_prompt = base_prompt.rstrip() + memory_section
+        shell_command = f"cd {shlex.quote(str(ARTIF_HOME))}; printf '\nARTIF Google AI development prompt:\n\n'; cat {shlex.quote(str(prompt_path))}; printf '\n\nCurrent Google AI memory:\n\n'; cat {shlex.quote(str(memory_path))}; printf '\n\nThe combined prompt and memory have also been copied to the clipboard.\n'; exec bash"
         command = self._terminal_command(shell_command)
         if command is None:
             messagebox.showerror("Terminal unavailable", f"No supported terminal was found. Prompt saved at {prompt_path}.")
             return
         subprocess.Popen(command, start_new_session=True)
         try:
-            self.root.clipboard_clear(); self.root.clipboard_append(prompt); self.root.update()
+            self.root.clipboard_clear(); self.root.clipboard_append(working_prompt); self.root.update()
         except Exception:
             pass
-        self.artif_status_var.set(f"Opened ARTIF development workspace. Prompt copied and saved at {prompt_path}.")
+        self.artif_status_var.set(f"Opened ARTIF development workspace using {prompt_path}; loaded memory from {memory_path}.")
 
     def lock_artif(self) -> None:
         if messagebox.askyesno("Lock ARTIF", "Create the ARTIF lock marker inside /home/fcai3abc, commit the isolated ARTIF repository, verify its GitHub raw marker, and run sudo chatgpt-share-readonly?"):

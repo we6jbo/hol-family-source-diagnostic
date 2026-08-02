@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HOL Genealogy Research Listener",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "Guides a genealogy Reddit workflow, captures visible Reddit text, and tests a localhost Ollama bridge.",
   "permissions": [
     "storage",
