@@ -1,5 +1,5 @@
-# HOL Family Source Diagnostic Next Version
+# HOL Family Source Diagnostic next-version notes
 
-## Current release: 1.4.6
+## Current release: 1.4.3
 
-Version 1.4.6 adds a persistent editable Google AI prompt and a shared non-secret JSON memory handoff under `/home/fcai3abc`.
+Version 1.4.3 adds supervised ARTIF development controls while preserving persistent recovery after `/tmp` is cleared. Future releases should keep ARTIF execution local, keep secrets out of Git, and retain the graphical-login recovery cache.

@@ -551,29 +551,6 @@ When `/tmp/to-github/hol-family-source-diagnostic` is missing, the updater first
 Version 1.4.2 stores a private recovery copy at `~/.local/share/hol-family-source-diagnostic/recovery-project`. After `/tmp` is cleared, the graphical-login helper restores this copy before attempting a Downloads ZIP or GitHub. This avoids dependence on DNS during early boot and ensures Tkinter starts only from a graphical session that has a valid display environment.
 
 
-## Version 1.4.5 isolated ARTIF architecture
-
-The ARTIF tab now treats `/home/fcai3abc` as the exclusive ARTIF and LEARN-ARTIF workspace. HOL does not search the HOL source tree for ARTIF executables. It resolves `/home/fcai3abc/ARTIF` and `/home/fcai3abc/LEARN-ARTIF`, then runs a concrete `run.sh`, `main.py`, `app.py`, or executable entry point from that directory.
-
-Execution initializes an interactive workspace experience where the user sees a visible GUI window popup or a dedicated tracking terminal window spawned instantly so they can visually audit runtime loops in real time. Terminal output is also recorded under `/home/fcai3abc/logs`.
-
-LEARN-ARTIF executes via `/home/fcai3abc/LEARN-ARTIF/run.sh` or `main.py`. On startup, it spawns a visible terminal console or visual GUI popup interface displaying the live observation loop, and atomically writes output findings to `/home/fcai3abc/INTEL.json`.
-
-ARTIF executes via `/home/fcai3abc/ARTIF/run.sh` or `main.py`. On startup, it spawns a visible terminal console or visual GUI popup window displaying live operating diagnostics so the user can easily observe state modifications.
-
-Every Google AI generated ARTIF component is expected to read or access `/home/fcai3abc/BZNhWFne.json`, preferably through `/home/fcai3abc/shared_config.py`. The one-minute selector uses `/home/fcai3abc/autorun-artif.txt`: its presence selects ARTIF and its absence selects LEARN-ARTIF.
-
-LOCK ARTIF operates only on the Git repository rooted at `/home/fcai3abc`. It creates `/home/fcai3abc/CS5lJbIvW.txt`, screens suspicious credential filenames, stages and commits that isolated repository, rebases without force pushing, derives the raw marker URL from the configured GitHub origin and current branch, verifies the marker, and then opens `sudo chatgpt-share-readonly` in a visible terminal.
-
-## Version 1.4.4 dedicated ARTIF tab
-
-Version 1.4.4 moves the full ARTIF development workspace into its own permanent `ARTIF` tab. This prevents the controls from falling below the visible area of `Config - Advanced` on smaller displays. No ARTIF execution or one-minute autorun behavior changed.
-
 ## Version 1.4.3 ARTIF controls
 
-Version 1.4.3 originally added LEARN ARTIF, RUN ARTIF, Ask Google AI to update ARTIF, and LOCK ARTIF. Later releases moved these controls to the ARTIF tab and replaced the original fallback lookup behavior with the isolated `/home/fcai3abc` architecture documented above.
-
-
-## Version 1.4.6 Google AI prompt and memory
-
-The ARTIF workspace uses `/home/fcai3abc/prompt-for-googleai.txt`. HOL creates the default prompt only when the file is absent. Existing contents are preserved and used as the base prompt. `/home/fcai3abc/memory-for-googleai.json` stores non-secret persistent development context. Each press of **Ask Google AI to update ARTIF** reads that JSON and adds it to the clipboard handoff. Google AI and generated ARTIF or LEARN-ARTIF Python and shell components may update the memory file using valid JSON and atomic writes. Credentials and other secrets must never be written there.
+Config - Advanced includes LEARN ARTIF, RUN ARTIF, Ask Google AI to update ARTIF, and LOCK ARTIF. HOL searches the canonical project root before `/home/fcai3abc`. One minute after startup it runs ARTIF when `autorun-artif.txt` exists, otherwise it runs LEARN-ARTIF. Pressing a running process button stops that process. `INTEL.json` is monitored without being uploaded automatically. LOCK ARTIF creates `CS5lJbIvW.txt`, refuses obvious credential filenames, commits and rebases without force pushing, verifies the raw GitHub marker, and opens `sudo chatgpt-share-readonly` in a terminal.
